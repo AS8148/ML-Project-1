@@ -67,7 +67,9 @@ def load_data(data_dir):
     cache = os.path.join(data_dir, "raw.npz")
     if not os.path.exists(cache):
         x_train, x_test, y, _, test_ids = load_csv_data(data_dir)
-        np.savez(cache, x_train=x_train, x_test=x_test, y=y, test_ids=test_ids)
+        tmp = cache.replace(".npz", "_tmp.npz")  # renamed once fully written
+        np.savez(tmp, x_train=x_train, x_test=x_test, y=y, test_ids=test_ids)
+        os.replace(tmp, cache)
     with open(os.path.join(data_dir, "x_train.csv")) as f:
         columns = f.readline().strip().split(",")[1:]
     with np.load(cache) as raw:

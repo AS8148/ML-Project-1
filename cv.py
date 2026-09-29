@@ -75,9 +75,12 @@ def summary(res, reference=None):
 
 def save_result(name, config, res, folder="results"):
     """Write the configuration and the per-fold results of a run to folder/name.json."""
-    commit = subprocess.run(
-        ["git", "describe", "--always", "--dirty"], capture_output=True, text=True
-    ).stdout.strip()
+    try:
+        commit = subprocess.run(
+            ["git", "describe", "--always", "--dirty"], capture_output=True, text=True
+        ).stdout.strip()
+    except OSError:  # git is not installed
+        commit = ""
     record = {"name": name, "commit": commit, "config": config, **res}
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name + ".json"), "w") as f:
