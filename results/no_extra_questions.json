@@ -1,0 +1,82 @@
+{
+ "name": "no_extra_questions",
+ "commit": "9770f3c",
+ "config": {
+  "lam": 10.0,
+  "gamma": 1.0,
+  "max_iters": 500,
+  "removed": [
+   "NUMADULT",
+   "LANDLINE",
+   "HHADULT",
+   "CHOLCHK",
+   "DIABAGE2",
+   "RENTHOM1",
+   "PREGNANT",
+   "STOPSMK2",
+   "LASTSMK2",
+   "LMTJOIN3",
+   "ARTHDIS2",
+   "ARTHSOCL",
+   "JOINPAIN",
+   "SEATBELT",
+   "FLUSHOT6",
+   "PNEUVAC3",
+   "HIVTST6",
+   "INSULIN",
+   "BLDSUGAR",
+   "FEETCHK2",
+   "DOCTDIAB",
+   "CHKHEMO3",
+   "FEETCHK",
+   "EYEEXAM",
+   "DIABEYE",
+   "DIABEDU",
+   "CVDASPRN",
+   "RDUCHART",
+   "RDUCSTRK",
+   "MSCODE",
+   "HTM4",
+   "WTKG3",
+   "FTJUDA1_",
+   "FRUTDA1_",
+   "BEANDAY_",
+   "GRENDAY_",
+   "ORNGDAY_",
+   "VEGEDA1_",
+   "METVL11_",
+   "METVL21_",
+   "STRFREQ_",
+   "PA1VIGM_",
+   "_PACAT1"
+  ]
+ },
+ "f1": [
+  0.43095966422422993,
+  0.43252496433666193,
+  0.43292372573256743,
+  0.4412578973521687,
+  0.4306590257879656
+ ],
+ "accuracy": [
+  0.8781141908056136,
+  0.8787694089322992,
+  0.8811617169762446,
+  0.8800646075548174,
+  0.8788913099791245
+ ],
+ "threshold": [
+  -1.3491400375299527,
+  -1.3321141488150583,
+  -1.2995040875002513,
+  -1.357788104509791,
+  -1.3539674745718622
+ ],
+ "seconds": [
+  39.6552460193634,
+  42.231688499450684,
+  43.10062217712402,
+  44.64528131484985,
+  89.46198344230652
+ ]
+}
