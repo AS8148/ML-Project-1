@@ -1,0 +1,310 @@
+"""Data loading and cleaning for the BRFSS heart-disease (MICHD) dataset.
+
+The cleaning pipeline follows the usual "fit on train, apply everywhere" pattern
+so that it can be used safely inside cross-validation (no information from the
+validation fold leaks into the statistics used for cleaning):
+
+    columns, x = drop_columns(x, columns)            # stateless
+    x = replace_missing_codes(x, columns)            # stateless
+    params = fit_cleaner(x_train, columns)           # learns statistics on train only
+    x_train_clean = transform(x_train, params)
+    x_val_clean = transform(x_val, params)
+"""
+
+import os
+
+import numpy as np
+
+from helpers import load_csv_data
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
+
+
+def load_data(data_dir="data/dataset"):
+    """Load the train/test data, using a .npz cache to avoid re-parsing the CSVs.
+
+    Parsing the CSV files takes ~30s, the cache loads in a couple of seconds.
+
+    Args:
+        data_dir: folder containing x_train.csv, y_train.csv and x_test.csv.
+
+    Returns:
+        x_train: (N, D) array of raw features.
+        x_test: (N_test, D) array of raw features.
+        y_train: (N,) array of labels in {-1, 1}.
+        train_ids, test_ids: sample ids.
+        columns: (D,) array of column names (without the Id column).
+    """
+    cache = os.path.join(data_dir, "cache.npz")
+    if os.path.exists(cache):
+        d = np.load(cache)
+        return (
+            d["x_train"],
+            d["x_test"],
+            d["y_train"],
+            d["train_ids"],
+            d["test_ids"],
+            d["columns"],
+        )
+
+    x_train, x_test, y_train, train_ids, test_ids = load_csv_data(data_dir)
+    with open(os.path.join(data_dir, "x_train.csv")) as f:
+        columns = np.array(f.readline().strip().split(",")[1:])
+    np.savez(
+        cache,
+        x_train=x_train,
+        x_test=x_test,
+        y_train=y_train,
+        train_ids=train_ids,
+        test_ids=test_ids,
+        columns=columns,
+    )
+    return x_train, x_test, y_train, train_ids, test_ids, columns
+
+
+# ---------------------------------------------------------------------------
+# Domain knowledge about the columns (BRFSS 2015 codebook)
+# ---------------------------------------------------------------------------
+
+# Survey administration / sampling design: carry no health information.
+ADMIN_COLUMNS = [
+    "_STATE", "FMONTH", "IDATE", "IMONTH", "IDAY", "IYEAR", "DISPCODE", "SEQNO",
+    "_PSU", "CTELENUM", "PVTRESD1", "COLGHOUS", "STATERES", "CELLFON3", "LADULT",
+    "CTELNUM1", "CELLFON2", "CADULT", "PVTRESD2", "CCLGHOUS", "CSTATE", "LANDLINE",
+    "QSTVER", "QSTLANG", "MSCODE", "_STSTR", "_STRWT", "_RAWRAKE", "_WT2RAKE",
+    "_CLLCPWT", "_DUALUSE", "_DUALCOR", "_LLCPWT",
+]  # fmt: skip
+
+# Raw answers with a special encoding (e.g. 1xx = per day, 2xx = per week) for
+# which the survey already provides a clean calculated version, or dates.
+REDUNDANT_COLUMNS = [
+    "ALCDAY5",   # -> DROCDY3_
+    "FRUITJU1", "FRUIT1", "FVBEANS", "FVGREEN", "FVORANG", "VEGETAB1",  # -> *DA1_ / *DAY_
+    "EXEROFT1", "EXEROFT2", "EXERHMM1", "EXERHMM2", "STRENGTH",  # -> PAFREQ*_, PADUR*_, STRFREQ_
+    "EXRACT11", "EXRACT21",  # activity type (76 nominal codes)
+    "WEIGHT2", "HEIGHT3", "HTIN4",  # -> WTKG3, HTM4, _BMI5
+    "FLSHTMY2", "HIVTSTD3",  # dates (MMYYYY)
+]  # fmt: skip
+
+# Columns where the answer code 88 means "none" and should become 0.
+ZERO_IF_88 = [
+    "PHYSHLTH", "MENTHLTH", "POORHLTH", "CHILDREN", "DRNK3GE5",
+    "ADPLEASR", "ADDOWN", "ADSLEEP", "ADENERGY", "ADEAT1", "ADFAIL", "ADTHINK", "ADMOVE",
+]  # fmt: skip
+
+# Columns whose missing codes do not follow the generic rules below.
+EXPLICIT_MISSING_CODES = {
+    "_AGEG5YR": [14],
+    "_AGE65YR": [3],
+    "DIABAGE2": [98, 99],  # 77 is a valid age here
+    "DROCDY3_": [900],
+    "_DRNKWEK": [99900],
+    "MAXVO2_": [999],
+    "FC60_": [999],
+}
+
+# Nominal (unordered) categorical variables: one-hot encoded instead of being
+# treated as numbers.
+NOMINAL_COLUMNS = ["MARITAL", "EMPLOY1", "_RACE", "RENTHOM1"]
+
+
+# ---------------------------------------------------------------------------
+# Stateless steps
+# ---------------------------------------------------------------------------
+
+
+def drop_columns(x, columns, to_drop=None):
+    """Remove the given columns (default: administrative + redundant ones).
+
+    Args:
+        x: (N, D) array.
+        columns: (D,) array of column names.
+        to_drop: iterable of column names, defaults to ADMIN + REDUNDANT columns.
+
+    Returns:
+        x: (N, D') array without the dropped columns.
+        columns: (D',) array of the remaining column names.
+    """
+    if to_drop is None:
+        to_drop = ADMIN_COLUMNS + REDUNDANT_COLUMNS
+    keep = ~np.isin(columns, list(to_drop))
+    return x[:, keep], columns[keep]
+
+
+def replace_missing_codes(x, columns):
+    """Replace BRFSS "don't know / refused / not asked" codes by NaN.
+
+    Rules (applied only to integer-valued columns, calculated variables with
+    fractional values such as FTJUDA1_ are left untouched):
+      * explicit per-column codes in EXPLICIT_MISSING_CODES;
+      * 88 -> 0 for the "number of days / none" columns in ZERO_IF_88;
+      * max value 9    -> 9 is missing; 7 is missing unless 6 is also a valid
+                          answer (e.g. EMPLOY1 where 7 = retired);
+      * max value 99   -> 77 and 99 are missing;
+      * max value 999  -> 777 and 999 are missing, 888 -> 0.
+
+    Args:
+        x: (N, D) array of raw features (not modified).
+        columns: (D,) array of column names.
+
+    Returns:
+        (N, D) float array where missing codes are NaN.
+    """
+    x = x.astype(float, copy=True)
+    for j, name in enumerate(columns):
+        col = x[:, j]
+        values = col[~np.isnan(col)]
+        if len(values) == 0:
+            continue
+
+        if name in EXPLICIT_MISSING_CODES:
+            col[np.isin(col, EXPLICIT_MISSING_CODES[name])] = np.nan
+            continue
+        if np.any(values != np.round(values)):
+            continue  # continuous calculated variable, no missing codes
+
+        if name in ZERO_IF_88:
+            col[col == 88] = 0
+
+        vmax = values.max()
+        if vmax == 9:
+            col[col == 9] = np.nan
+            if not np.any(values == 6):
+                col[col == 7] = np.nan
+        elif vmax == 99:
+            col[np.isin(col, [77, 99])] = np.nan
+        elif vmax == 999:
+            col[np.isin(col, [777, 999])] = np.nan
+            col[col == 888] = 0
+    return x
+
+
+# ---------------------------------------------------------------------------
+# Fit / transform (statistics learned on the training data only)
+# ---------------------------------------------------------------------------
+
+
+def fit_cleaner(
+    x,
+    columns,
+    max_nan_frac=0.5,
+    clip_quantiles=(0.005, 0.995),
+    add_nan_indicators=False,
+):
+    """Learn the cleaning parameters on (training) data.
+
+    Steps learned here and applied by `transform`:
+      1. drop columns with more than `max_nan_frac` missing values;
+      2. one-hot encode NOMINAL_COLUMNS (a missing value gives all zeros);
+      3. for the other (numeric) columns: optionally add a 0/1 "was missing"
+         indicator, clip outliers of continuous columns to train quantiles,
+         impute missing values with the train median;
+      4. drop constant columns and standardize (zero mean, unit variance).
+
+    Args:
+        x: (N, D) array after `replace_missing_codes`.
+        columns: (D,) array of column names.
+        max_nan_frac: float in [0, 1], columns with a larger missing fraction are dropped.
+        clip_quantiles: (low, high) quantiles used to clip continuous columns, or None.
+        add_nan_indicators: bool, add a missing-value indicator per numeric column
+            that has missing values.
+
+    Returns:
+        dict of parameters to pass to `transform`.
+    """
+    nan_frac = np.isnan(x).mean(axis=0)
+    keep = nan_frac <= max_nan_frac
+
+    nominal_idx, categories = [], []
+    numeric_idx = []
+    for j in np.where(keep)[0]:
+        if columns[j] in NOMINAL_COLUMNS:
+            nominal_idx.append(j)
+            categories.append(np.unique(x[~np.isnan(x[:, j]), j]))
+        else:
+            numeric_idx.append(j)
+    numeric_idx = np.array(numeric_idx, dtype=int)
+
+    xn = x[:, numeric_idx]
+    indicator_idx = (
+        np.where(np.isnan(xn).any(axis=0))[0]
+        if add_nan_indicators
+        else np.array([], dtype=int)
+    )
+
+    # Clip only continuous columns (many distinct values), not categorical codes
+    n_unique = np.array([len(np.unique(c[~np.isnan(c)])) for c in xn.T])
+    lower = np.full(len(numeric_idx), -np.inf)
+    upper = np.full(len(numeric_idx), np.inf)
+    if clip_quantiles is not None:
+        cont = n_unique > 20
+        lower[cont] = np.nanquantile(xn[:, cont], clip_quantiles[0], axis=0)
+        upper[cont] = np.nanquantile(xn[:, cont], clip_quantiles[1], axis=0)
+
+    medians = np.nanmedian(xn, axis=0)
+
+    params = {
+        "numeric_idx": numeric_idx,
+        "nominal_idx": nominal_idx,
+        "categories": categories,
+        "indicator_idx": indicator_idx,
+        "lower": lower,
+        "upper": upper,
+        "medians": medians,
+        "input_columns": columns,
+    }
+
+    # Compute standardization statistics on the transformed training data
+    z = _build_features(x, params)
+    mean, std = z.mean(axis=0), z.std(axis=0)
+    params["keep_features"] = std > 1e-12  # drop constant columns
+    params["mean"] = mean[params["keep_features"]]
+    params["std"] = std[params["keep_features"]]
+    params["feature_names"] = _feature_names(params)[params["keep_features"]]
+    return params
+
+
+def _build_features(x, params):
+    """Apply clipping, imputation, indicators and one-hot encoding (no scaling)."""
+    xn = x[:, params["numeric_idx"]]
+    blocks = []
+    if len(params["indicator_idx"]):
+        blocks.append(np.isnan(xn[:, params["indicator_idx"]]).astype(float))
+    xn = np.clip(xn, params["lower"], params["upper"])
+    xn = np.where(np.isnan(xn), params["medians"], xn)
+    blocks.insert(0, xn)
+    for j, cats in zip(params["nominal_idx"], params["categories"]):
+        blocks.append((x[:, [j]] == cats[None, :]).astype(float))
+    return np.hstack(blocks)
+
+
+def _feature_names(params):
+    """Names of the columns produced by `_build_features`."""
+    cols = params["input_columns"]
+    names = list(cols[params["numeric_idx"]])
+    names += [
+        f"{cols[params['numeric_idx'][i]]}_isnan" for i in params["indicator_idx"]
+    ]
+    for j, cats in zip(params["nominal_idx"], params["categories"]):
+        names += [f"{cols[j]}={int(c)}" for c in cats]
+    return np.array(names)
+
+
+def transform(x, params, add_bias=True):
+    """Apply the cleaning learned by `fit_cleaner` to any data (train, val or test).
+
+    Args:
+        x: (N, D) array after `replace_missing_codes`, same columns as in fit.
+        params: dict returned by `fit_cleaner`.
+        add_bias: bool, prepend a column of ones (intercept).
+
+    Returns:
+        (N, D') cleaned and standardized feature matrix.
+    """
+    z = _build_features(x, params)[:, params["keep_features"]]
+    z = (z - params["mean"]) / params["std"]
+    if add_bias:
+        z = np.c_[np.ones(len(z)), z]
+    return z

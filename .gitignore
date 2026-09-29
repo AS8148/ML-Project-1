@@ -1,0 +1,8 @@
+# Extracted dataset and cached arrays (large, regenerate from data/dataset_to_release.zip)
+data/dataset/
+
+# Python / IDE / OS
+__pycache__/
+.ipynb_checkpoints/
+.idea/
+.DS_Store
