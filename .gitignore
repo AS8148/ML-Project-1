@@ -10,3 +10,13 @@ __pycache__/
 # Generated submissions
 submission*.csv
 submissions/
+
+# Experiment outputs (only small JSON/figures are tracked)
+results/oof_*.npy
+
+# LaTeX build files
+report/*.aux
+report/*.log
+report/*.bbl
+report/*.blg
+report/*.out
