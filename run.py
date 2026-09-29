@@ -18,10 +18,13 @@ GAMMA = 1.0
 MAX_ITERS = 500
 
 
-def logistic_scores(x_fit, y_fit, x_apply):
-    """Build features and fit on x_fit; return the logits of x_fit and x_apply."""
-    tx_fit, tx_apply, _ = features.build_features(x_fit, x_apply)
-    lambda_ = LAMBDA / (2 * len(y_fit))
+def logistic_scores(x_fit, y_fit, x_apply, lam=LAMBDA, **options):
+    """Build features and fit on x_fit; return the logits of x_fit and x_apply.
+
+    The options are passed to features.build_features (for the ablation study).
+    """
+    tx_fit, tx_apply, _ = features.build_features(x_fit, x_apply, **options)
+    lambda_ = lam / (2 * len(y_fit))
     w0 = np.zeros(tx_fit.shape[1])
     w, _ = reg_logistic_regression(y_fit, tx_fit, lambda_, w0, MAX_ITERS, GAMMA)
     return tx_fit @ w, tx_apply @ w

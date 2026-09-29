@@ -59,9 +59,10 @@ RECODES = [
 ]
 
 
-def load_data(data_dir):
-    """Return decoded x_train, x_test, labels y in {0, 1} and the test ids.
+def load_data(data_dir, decoded=True):
+    """Return x_train, x_test (columns USED), labels y in {0, 1} and the test ids.
 
+    With decoded=False the answer codes are kept raw (for the ablation study).
     The parsed CSVs are cached in data_dir/raw.npz, because parsing takes minutes.
     """
     cache = os.path.join(data_dir, "raw.npz")
@@ -73,8 +74,12 @@ def load_data(data_dir):
     with open(os.path.join(data_dir, "x_train.csv")) as f:
         columns = f.readline().strip().split(",")[1:]
     with np.load(cache) as raw:
-        x_train = decode(raw["x_train"], columns)
-        x_test = decode(raw["x_test"], columns)
+        if decoded:
+            x_train = decode(raw["x_train"], columns)
+            x_test = decode(raw["x_test"], columns)
+        else:
+            used = [columns.index(c) for c in USED]
+            x_train, x_test = raw["x_train"][:, used], raw["x_test"][:, used]
         return x_train, x_test, (raw["y"] == 1).astype(float), raw["test_ids"]
 
 
