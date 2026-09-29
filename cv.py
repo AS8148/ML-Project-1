@@ -73,14 +73,22 @@ def summary(res, reference=None):
     return text
 
 
-def save_result(name, config, res, folder="results"):
-    """Write the configuration and the per-fold results of a run to folder/name.json."""
+def _git(*args):
+    """Return the output of a git command, or "" if git is not available."""
     try:
-        commit = subprocess.run(
-            ["git", "describe", "--always", "--dirty"], capture_output=True, text=True
-        ).stdout.strip()
-    except OSError:  # git is not installed
-        commit = ""
+        return subprocess.run(["git", *args], capture_output=True, text=True).stdout
+    except OSError:
+        return ""
+
+
+def save_result(name, config, res, folder="results"):
+    """Write the configuration and the per-fold results of a run to folder/name.json.
+
+    The commit gets a "-dirty" suffix when the Python code has uncommitted changes.
+    """
+    commit = _git("rev-parse", "--short", "HEAD").strip()
+    if _git("status", "--porcelain", "--", "*.py"):
+        commit += "-dirty"
     record = {"name": name, "commit": commit, "config": config, **res}
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name + ".json"), "w") as f:
