@@ -21,7 +21,7 @@ MAX_ITERS = 500
 def logistic_scores(x_fit, y_fit, x_apply, lam=LAMBDA, **options):
     """Build features and fit on x_fit; return the logits of x_fit and x_apply.
 
-    The options are passed to features.build_features (for the ablation study).
+    lam replaces LAMBDA and the options go to features.build_features (ablations).
     """
     tx_fit, tx_apply, _ = features.build_features(x_fit, x_apply, **options)
     lambda_ = lam / (2 * len(y_fit))

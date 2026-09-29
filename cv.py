@@ -60,16 +60,17 @@ def cross_validate(fit_score, y, folds):
 
 
 def summary(res, reference=None):
-    """Return mean +- std of F1 and accuracy, and the paired F1 delta vs a reference."""
+    """Return F1, accuracy and the paired F1 delta vs a reference: mean +- std over folds."""
+    f1, acc = np.array(res["f1"]), np.array(res["accuracy"])
     text = "F1 %.4f +- %.4f | accuracy %.4f +- %.4f" % (
-        np.mean(res["f1"]),
-        np.std(res["f1"]),
-        np.mean(res["accuracy"]),
-        np.std(res["accuracy"]),
+        f1.mean(),
+        f1.std(ddof=1),
+        acc.mean(),
+        acc.std(ddof=1),
     )
     if reference is not None:
-        delta = 100 * np.subtract(res["f1"], reference["f1"])
-        text += " | delta F1 %+.2f +- %.2f pp" % (delta.mean(), delta.std())
+        delta = 100 * (f1 - reference["f1"])
+        text += " | delta F1 %+.2f +- %.2f pp" % (delta.mean(), delta.std(ddof=1))
     return text
 
 

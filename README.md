@@ -5,7 +5,7 @@ using only Python and NumPy.
 
 ## Setup
 
-- Python 3.9 or newer with NumPy.
+- Python 3.9 or newer with NumPy (and matplotlib for the figure of `experiments.py`).
 - Extract the data so that `x_train.csv`, `y_train.csv` and `x_test.csv` are in
   `data/dataset/`:
 
@@ -17,14 +17,14 @@ using only Python and NumPy.
 
 ```
 python run.py          # trains the final model and writes submission.csv
-python experiments.py  # cross-validation experiments, results in results/*.json
+python experiments.py  # experiments of the report: results/*.json, report/threshold.pdf
 ```
 
 Paths are relative to the repository, so the scripts can be launched from any
 folder. The first run parses the CSV files, which takes several minutes and
 about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 (1.1 GB); later runs load them in seconds. With the cache, `run.py` takes 2-4
-minutes and `experiments.py` about 12 minutes on a laptop.
+minutes and `experiments.py` about one hour on a laptop.
 
 `run.py` uses no random numbers, so its output is reproducible up to
 floating-point differences between machines. Our submission file has MD5
