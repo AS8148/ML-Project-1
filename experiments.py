@@ -14,7 +14,6 @@ import numpy as np
 
 import cv
 import features
-import gbdt
 import run
 from implementations import (
     least_squares,
@@ -151,19 +150,6 @@ def plot_threshold(y, folds, oof, res, path):
     plt.close(fig)
 
 
-def gbdt_scores(x_fit, y_fit, x_apply, **params):
-    """Boost trees on 80% of x_fit, stopping early on the other 20%.
-
-    The training scores are NaN outside that 20%, where the threshold is chosen.
-    """
-    held = cv.stratified_folds(y_fit, seed=1) == 0
-    model = gbdt.fit(x_fit[~held], y_fit[~held], x_fit[held], y_fit[held], **params)
-    print(f"  {len(model[3])} trees")
-    s_fit = np.full(len(y_fit), np.nan)
-    s_fit[held] = gbdt.predict(model, x_fit[held])
-    return s_fit, gbdt.predict(model, x_apply)
-
-
 def main(groups):
     os.chdir(os.path.dirname(os.path.abspath(__file__)))  # paths are relative to here
     x, _, y, _ = features.load_data(run.DATA_DIR)
@@ -176,7 +162,11 @@ def main(groups):
         fixed_threshold(y, folds, oof, ref)
         # All choices were made on the folds of seed 42: check on unseen folds.
         new_folds = cv.stratified_folds(y, seed=43)
-        evaluate("logistic_seed43", run.logistic_scores, x, y, new_folds, final)
+        ref43, _ = evaluate(
+            "logistic_seed43", run.logistic_scores, x, y, new_folds, final
+        )
+        config = {"depth": run.DEPTH, "rate": run.RATE}
+        evaluate("gbdt_seed43", run.gbdt_scores, x, y, new_folds, config, ref43)
 
     if "methods" in groups:
         for name, fit, config in FITS:
@@ -196,7 +186,7 @@ def main(groups):
     if "gbdt" in groups:
         for depth, rate in GBDT_GRID:
             config = {"depth": depth, "rate": rate}
-            scores_fn = partial(gbdt_scores, **config)
+            scores_fn = partial(run.gbdt_scores, **config)
             evaluate(
                 f"gbdt_depth{depth}_rate{rate}", scores_fn, x, y, folds, config, ref
             )
