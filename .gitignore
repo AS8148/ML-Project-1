@@ -1,0 +1,12 @@
+# Raw data (x_train.csv exceeds GitHub's 100 MB limit)
+data/dataset/
+data/cache/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated submissions
+submission*.csv
+submissions/
