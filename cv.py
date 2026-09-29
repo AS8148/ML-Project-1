@@ -40,7 +40,8 @@ def best_threshold(y, scores):
 def cross_validate(fit_score, y, folds):
     """Cross-validate fit_score(train_idx, test_idx) -> (train_scores, test_scores).
 
-    In each fold the threshold is chosen on the training scores only.
+    In each fold the threshold is chosen on the training scores only, skipping NaN
+    ones (a model may score only the training rows it held out from its fit).
     Returns per-fold F1, accuracy, threshold and fit time, and out-of-fold scores.
     """
     res = {"f1": [], "accuracy": [], "threshold": [], "seconds": []}
@@ -50,7 +51,8 @@ def cross_validate(fit_score, y, folds):
         start = time.time()
         s_train, s_test = fit_score(train, test)
         res["seconds"].append(time.time() - start)
-        t = best_threshold(y[train], s_train)
+        known = ~np.isnan(s_train)
+        t = best_threshold(y[train][known], s_train[known])
         f1, acc = f1_accuracy(y[test], s_test >= t)
         res["f1"].append(f1)
         res["accuracy"].append(acc)

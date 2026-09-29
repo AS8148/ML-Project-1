@@ -1,10 +1,12 @@
 """Cross-validation experiments behind the tables and the figure of the report.
 
-`python experiments.py` takes about one hour: every experiment is saved to
-results/<name>.json and the figure to report/threshold.pdf.
+`python experiments.py [final] [methods] [ablations] [gbdt]` runs the chosen groups
+(all by default, about three hours). Every experiment is saved to results/<name>.json
+and the figure to report/threshold.pdf.
 """
 
 import os
+import sys
 from functools import partial
 
 import matplotlib.pyplot as plt
@@ -12,6 +14,7 @@ import numpy as np
 
 import cv
 import features
+import gbdt
 import run
 from implementations import (
     least_squares,
@@ -76,6 +79,9 @@ FITS = [
         {"gamma": run.GAMMA, "max_iters": run.MAX_ITERS},
     ),
 ]
+
+# Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
+GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
 
 # Each ablation changes one part of the final model.
 ABLATIONS = [
@@ -145,31 +151,56 @@ def plot_threshold(y, folds, oof, res, path):
     plt.close(fig)
 
 
-def main():
+def gbdt_scores(x_fit, y_fit, x_apply, **params):
+    """Boost trees on 80% of x_fit, stopping early on the other 20%.
+
+    The training scores are NaN outside that 20%, where the threshold is chosen.
+    """
+    held = cv.stratified_folds(y_fit, seed=1) == 0
+    model = gbdt.fit(x_fit[~held], y_fit[~held], x_fit[held], y_fit[held], **params)
+    print(f"  {len(model[3])} trees")
+    s_fit = np.full(len(y_fit), np.nan)
+    s_fit[held] = gbdt.predict(model, x_fit[held])
+    return s_fit, gbdt.predict(model, x_apply)
+
+
+def main(groups):
     os.chdir(os.path.dirname(os.path.abspath(__file__)))  # paths are relative to here
     x, _, y, _ = features.load_data(run.DATA_DIR)
     folds = cv.stratified_folds(y)
     final = {"lam": run.LAMBDA, "gamma": run.GAMMA, "max_iters": run.MAX_ITERS}
     ref, oof = evaluate("logistic", run.logistic_scores, x, y, folds, final)
-    plot_threshold(y, folds, oof, ref, "report/threshold.pdf")
-    fixed_threshold(y, folds, oof, ref)
-    # All choices were made on the folds of seed 42: check on unseen folds.
-    new_folds = cv.stratified_folds(y, seed=43)
-    evaluate("logistic_seed43", run.logistic_scores, x, y, new_folds, final)
 
-    for name, fit, config in FITS:
-        evaluate(name, partial(linear_scores, fit), x, y, folds, config, ref)
+    if "final" in groups:
+        plot_threshold(y, folds, oof, ref, "report/threshold.pdf")
+        fixed_threshold(y, folds, oof, ref)
+        # All choices were made on the folds of seed 42: check on unseen folds.
+        new_folds = cv.stratified_folds(y, seed=43)
+        evaluate("logistic_seed43", run.logistic_scores, x, y, new_folds, final)
 
-    for name, change in ABLATIONS:
-        options = dict(change)
-        x_ablation = x
-        if not options.pop("decoded", True):
-            x_ablation = features.load_data(run.DATA_DIR, decoded=False)[0]
-        if "removed" in options:
-            x_ablation = without(x, options.pop("removed"))
-        scores_fn = partial(run.logistic_scores, **options)
-        evaluate(name, scores_fn, x_ablation, y, folds, {**final, **change}, ref)
+    if "methods" in groups:
+        for name, fit, config in FITS:
+            evaluate(name, partial(linear_scores, fit), x, y, folds, config, ref)
+
+    if "ablations" in groups:
+        for name, change in ABLATIONS:
+            options = dict(change)
+            x_ablation = x
+            if not options.pop("decoded", True):
+                x_ablation = features.load_data(run.DATA_DIR, decoded=False)[0]
+            if "removed" in options:
+                x_ablation = without(x, options.pop("removed"))
+            scores_fn = partial(run.logistic_scores, **options)
+            evaluate(name, scores_fn, x_ablation, y, folds, {**final, **change}, ref)
+
+    if "gbdt" in groups:
+        for depth, rate in GBDT_GRID:
+            config = {"depth": depth, "rate": rate}
+            scores_fn = partial(gbdt_scores, **config)
+            evaluate(
+                f"gbdt_depth{depth}_rate{rate}", scores_fn, x, y, folds, config, ref
+            )
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:] or ["final", "methods", "ablations", "gbdt"])
