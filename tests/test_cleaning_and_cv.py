@@ -19,40 +19,68 @@ import data_cleaning as dc  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def test_missing_codes_generic_rules():
-    columns = np.array(["YESNO", "EMPLOY1", "COUNT99", "CODE999", "PHYSHLTH", "FRAC"])
+def test_missing_and_zero_codes_follow_codebook():
+    columns = np.array(["GENHLTH", "EMPLOY1", "PHYSHLTH", "SCNTWRK1", "NUMPHON2"])
     x = np.array(
         [
-            [1, 1, 5, 101, 88, 0.5],
-            [2, 6, 77, 777, 3, 99.0],
-            [7, 7, 99, 888, 77, 1.25],
-            [9, 9, 12, 999, 99, np.nan],
+            [1, 1, 88, 40, 6],
+            [5, 7, 3, 77, 7],
+            [7, 8, 77, 97, 9],
+            [9, 9, 99, 98, np.nan],
         ],
         dtype=float,
     )
     out = dc.replace_missing_codes(x, columns)
-    # max 9 and no 6: both 7 and 9 are missing
-    np.testing.assert_array_equal(out[:, 0], [1, 2, np.nan, np.nan])
-    # max 9 with 6 present: 7 is a real answer (retired), only 9 is missing
-    np.testing.assert_array_equal(out[:, 1], [1, 6, 7, np.nan])
-    # max 99: 77 and 99 are missing
-    np.testing.assert_array_equal(out[:, 2], [5, np.nan, np.nan, 12])
-    # max 999: 777/999 missing, 888 means zero
-    np.testing.assert_array_equal(out[:, 3], [101, np.nan, 0, np.nan])
-    # 88 = "none" -> 0 days
-    np.testing.assert_array_equal(out[:, 4], [0, 3, np.nan, np.nan])
-    # fractional (calculated) columns are left untouched
-    np.testing.assert_array_equal(out[:, 5], x[:, 5])
+    # 7 = don't know, 9 = refused
+    np.testing.assert_array_equal(out[:, 0], [1, 5, np.nan, np.nan])
+    # EMPLOY1: 7 = retired and 8 = unable to work are real answers
+    np.testing.assert_array_equal(out[:, 1], [1, 7, 8, np.nan])
+    # 88 = none -> 0 days, 77 / 99 missing
+    np.testing.assert_array_equal(out[:, 2], [0, 3, np.nan, np.nan])
+    # SCNTWRK1: 77 hours is valid, 97 = don't know, 98 = zero hours
+    np.testing.assert_array_equal(out[:, 3], [40, 77, np.nan, 0])
+    # NUMPHON2: 6 = six or more numbers, 7 = don't know
+    np.testing.assert_array_equal(out[:, 4], [6, np.nan, np.nan, np.nan])
     # input is not modified
     assert x[2, 0] == 7
 
 
-def test_missing_codes_explicit_rules():
-    columns = np.array(["_AGEG5YR", "DIABAGE2"])
-    x = np.array([[1, 77], [13, 98], [14, 99]], dtype=float)
+def test_explicit_and_scaled_codes():
+    columns = np.array(["_AGEG5YR", "DIABAGE2", "MAXVO2_", "PAFREQ1_", "_DRNKWEK"])
+    x = np.array(
+        [[1, 77, 30.5, 2.5, 0], [13, 98, 999, 99, 14], [14, 99, 50.1, 7.0, 99900]],
+        dtype=float,
+    )
     out = dc.replace_missing_codes(x, columns)
     np.testing.assert_array_equal(out[:, 0], [1, 13, np.nan])
-    np.testing.assert_array_equal(out[:, 1], [77, np.nan, np.nan])  # 77 is an age here
+    np.testing.assert_array_equal(out[:, 1], [77, np.nan, np.nan])  # 77 is an age
+    np.testing.assert_array_equal(out[:, 2], [30.5, np.nan, 50.1])  # 99900 / 100
+    np.testing.assert_array_equal(out[:, 3], [2.5, np.nan, 7.0])  # 99000 / 1000
+    np.testing.assert_array_equal(out[:, 4], [0, 14, np.nan])
+
+
+def test_recode_non_ordered_answers():
+    columns = np.array(["BPHIGH4", "TETANUS", "SEATBELT", "CHECKUP1"])
+    x = np.array([[1, 1, 1, 1], [2, 3, 5, 4], [3, 4, 8, 8], [4, 7, 7, 7]], dtype=float)
+    out = dc.replace_missing_codes(x, columns)
+    # 1 = yes, 2 = only during pregnancy, 3 = no, 4 = borderline -> 2, 0, 0, 1
+    np.testing.assert_array_equal(out[:, 0], [2, 0, 0, 1])
+    # 1-3 = yes (3 = yes but not sure which type), 4 = no, 7 = don't know
+    np.testing.assert_array_equal(out[:, 1], [1, 1, 0, np.nan])
+    # 8 = never drives -> not applicable
+    np.testing.assert_array_equal(out[:, 2], [1, 5, np.nan, np.nan])
+    # 8 = never had a checkup -> after "5 or more years" (4)
+    np.testing.assert_array_equal(out[:, 3], [1, 4, 5, np.nan])
+
+
+def test_unit_coded_answers():
+    columns = np.array(["BLDSUGAR", "LONGWTCH"])
+    x = np.array([[102, 102], [203, 406], [888, 777], [401, 555]], dtype=float)
+    out = dc.replace_missing_codes(x, columns)
+    # per day / week / never / per year -> times per year
+    np.testing.assert_allclose(out[:, 0], [730, 156, 0, 1])
+    # 2 days, 6 years, don't know, all my life -> years
+    np.testing.assert_allclose(out[:, 1], [2 / 365, 6, np.nan, np.nan])
 
 
 def test_drop_columns():

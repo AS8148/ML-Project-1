@@ -15,6 +15,7 @@ import os
 
 import numpy as np
 
+from codebook import MISSING_CODES, NOMINAL_COLUMNS, RECODE, UNIT_CODED, ZERO_CODES
 from helpers import load_csv_data
 
 # ---------------------------------------------------------------------------
@@ -78,36 +79,19 @@ ADMIN_COLUMNS = [
 ]  # fmt: skip
 
 # Raw answers with a special encoding (e.g. 1xx = per day, 2xx = per week) for
-# which the survey already provides a clean calculated version, or dates.
+# which the survey already provides a clean calculated version, dates, and
+# duplicated derived variables.
 REDUNDANT_COLUMNS = [
     "ALCDAY5",   # -> DROCDY3_
     "FRUITJU1", "FRUIT1", "FVBEANS", "FVGREEN", "FVORANG", "VEGETAB1",  # -> *DA1_ / *DAY_
     "EXEROFT1", "EXEROFT2", "EXERHMM1", "EXERHMM2", "STRENGTH",  # -> PAFREQ*_, PADUR*_, STRFREQ_
-    "EXRACT11", "EXRACT21",  # activity type (76 nominal codes)
+    "EXRACT11", "EXRACT21",  # activity type (76 nominal codes), summarized by METVL*_ / ACTIN*_
     "WEIGHT2", "HEIGHT3", "HTIN4",  # -> WTKG3, HTM4, _BMI5
     "FLSHTMY2", "HIVTSTD3",  # dates (MMYYYY)
+    "_PRACE1", "_MRACE1", "_HISPANC", "_RACEG21", "_RACEGR3", "_RACE_G1",  # -> _RACE
+    "_CRACE1", "_CPRACE", "_CHISPNC",  # race of the randomly selected child
+    "PCDMDECN",  # multiple-response code
 ]  # fmt: skip
-
-# Columns where the answer code 88 means "none" and should become 0.
-ZERO_IF_88 = [
-    "PHYSHLTH", "MENTHLTH", "POORHLTH", "CHILDREN", "DRNK3GE5",
-    "ADPLEASR", "ADDOWN", "ADSLEEP", "ADENERGY", "ADEAT1", "ADFAIL", "ADTHINK", "ADMOVE",
-]  # fmt: skip
-
-# Columns whose missing codes do not follow the generic rules below.
-EXPLICIT_MISSING_CODES = {
-    "_AGEG5YR": [14],
-    "_AGE65YR": [3],
-    "DIABAGE2": [98, 99],  # 77 is a valid age here
-    "DROCDY3_": [900],
-    "_DRNKWEK": [99900],
-    "MAXVO2_": [999],
-    "FC60_": [999],
-}
-
-# Nominal (unordered) categorical variables: one-hot encoded instead of being
-# treated as numbers.
-NOMINAL_COLUMNS = ["MARITAL", "EMPLOY1", "_RACE", "RENTHOM1"]
 
 
 # ---------------------------------------------------------------------------
@@ -134,50 +118,42 @@ def drop_columns(x, columns, to_drop=None):
 
 
 def replace_missing_codes(x, columns):
-    """Replace BRFSS "don't know / refused / not asked" codes by NaN.
+    """Decode the BRFSS answer codes using the 2015 codebook (see codebook.py).
 
-    Rules (applied only to integer-valued columns, calculated variables with
-    fractional values such as FTJUDA1_ are left untouched):
-      * explicit per-column codes in EXPLICIT_MISSING_CODES;
-      * 88 -> 0 for the "number of days / none" columns in ZERO_IF_88;
-      * max value 9    -> 9 is missing; 7 is missing unless 6 is also a valid
-                          answer (e.g. EMPLOY1 where 7 = retired);
-      * max value 99   -> 77 and 99 are missing;
-      * max value 999  -> 777 and 999 are missing, 888 -> 0.
+    For each column, in this order:
+      1. MISSING_CODES ("don't know", "refused", "not applicable") -> NaN;
+      2. ZERO_CODES ("none", "never") -> 0;
+      3. RECODE: explicit value mappings for code sets that are not ordered
+         (e.g. BPHIGH4: 1 = yes, 3 = no, 4 = borderline -> 2, 0, 1);
+      4. UNIT_CODED: <unit><count> answers converted to a common unit
+         (e.g. BLDSUGAR 203 = 3 times per week -> 156 times per year).
 
     Args:
         x: (N, D) array of raw features (not modified).
         columns: (D,) array of column names.
 
     Returns:
-        (N, D) float array where missing codes are NaN.
+        (N, D) float array with decoded values and NaN for missing answers.
     """
     x = x.astype(float, copy=True)
     for j, name in enumerate(columns):
         col = x[:, j]
-        values = col[~np.isnan(col)]
-        if len(values) == 0:
-            continue
-
-        if name in EXPLICIT_MISSING_CODES:
-            col[np.isin(col, EXPLICIT_MISSING_CODES[name])] = np.nan
-            continue
-        if np.any(values != np.round(values)):
-            continue  # continuous calculated variable, no missing codes
-
-        if name in ZERO_IF_88:
-            col[col == 88] = 0
-
-        vmax = values.max()
-        if vmax == 9:
-            col[col == 9] = np.nan
-            if not np.any(values == 6):
-                col[col == 7] = np.nan
-        elif vmax == 99:
-            col[np.isin(col, [77, 99])] = np.nan
-        elif vmax == 999:
-            col[np.isin(col, [777, 999])] = np.nan
-            col[col == 888] = 0
+        if name in MISSING_CODES:
+            col[np.isin(col, MISSING_CODES[name])] = np.nan
+        if name in ZERO_CODES:
+            col[np.isin(col, ZERO_CODES[name])] = 0
+        if name in RECODE:
+            original = col.copy()
+            for old, new in RECODE[name].items():
+                col[original == old] = new
+        if name in UNIT_CODED:
+            unit = col // 100
+            count = col % 100
+            decoded = np.full_like(col, np.nan)
+            decoded[col == 0] = 0
+            for u, mult in UNIT_CODED[name].items():
+                decoded[unit == u] = count[unit == u] * mult
+            col[:] = decoded
     return x
 
 
@@ -192,6 +168,7 @@ def fit_cleaner(
     max_nan_frac=0.5,
     clip_quantiles=(0.005, 0.995),
     add_nan_indicators=False,
+    extra_nominal=(),
 ):
     """Learn the cleaning parameters on (training) data.
 
@@ -210,9 +187,11 @@ def fit_cleaner(
         clip_quantiles: (low, high) quantiles used to clip continuous columns, or None.
         add_nan_indicators: bool, add a missing-value indicator per numeric column
             that has missing values.
+        extra_nominal: additional column names to one-hot encode (e.g. "_STATE").
 
     Returns:
-        dict of parameters to pass to `transform`.
+        dict of parameters to pass to `transform`. Besides the fitted statistics
+        it contains "feature_names" and "is_continuous" (bool per output feature).
     """
     nan_frac = np.isnan(x).mean(axis=0)
     keep = nan_frac <= max_nan_frac
@@ -220,7 +199,7 @@ def fit_cleaner(
     nominal_idx, categories = [], []
     numeric_idx = []
     for j in np.where(keep)[0]:
-        if columns[j] in NOMINAL_COLUMNS:
+        if columns[j] in NOMINAL_COLUMNS or columns[j] in extra_nominal:
             nominal_idx.append(j)
             categories.append(np.unique(x[~np.isnan(x[:, j]), j]))
         else:
@@ -236,10 +215,10 @@ def fit_cleaner(
 
     # Clip only continuous columns (many distinct values), not categorical codes
     n_unique = np.array([len(np.unique(c[~np.isnan(c)])) for c in xn.T])
+    cont = n_unique > 20
     lower = np.full(len(numeric_idx), -np.inf)
     upper = np.full(len(numeric_idx), np.inf)
     if clip_quantiles is not None:
-        cont = n_unique > 20
         lower[cont] = np.nanquantile(xn[:, cont], clip_quantiles[0], axis=0)
         upper[cont] = np.nanquantile(xn[:, cont], clip_quantiles[1], axis=0)
 
@@ -263,6 +242,8 @@ def fit_cleaner(
     params["mean"] = mean[params["keep_features"]]
     params["std"] = std[params["keep_features"]]
     params["feature_names"] = _feature_names(params)[params["keep_features"]]
+    is_cont = np.r_[cont, np.zeros(z.shape[1] - len(cont), dtype=bool)]
+    params["is_continuous"] = is_cont[params["keep_features"]]
     return params
 
 
