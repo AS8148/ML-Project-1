@@ -28,7 +28,12 @@ def f1_accuracy(y, pred):
 
 
 def best_threshold(y, scores):
-    """Return the threshold t maximizing the F1 of the rule scores >= t."""
+    """Return the threshold t maximizing the F1 of the rule scores >= t.
+
+    NaN scores are skipped (a model may score only some of its training rows).
+    """
+    known = ~np.isnan(scores)
+    y, scores = y[known], scores[known]
     order = np.argsort(-scores, kind="stable")
     s, ys = scores[order], y[order]
     tp = np.cumsum(ys)
@@ -40,8 +45,7 @@ def best_threshold(y, scores):
 def cross_validate(fit_score, y, folds):
     """Cross-validate fit_score(train_idx, test_idx) -> (train_scores, test_scores).
 
-    In each fold the threshold is chosen on the training scores only, skipping NaN
-    ones (a model may score only the training rows it held out from its fit).
+    In each fold the threshold is chosen on the training scores only.
     Returns per-fold F1, accuracy, threshold and fit time, and out-of-fold scores.
     """
     res = {"f1": [], "accuracy": [], "threshold": [], "seconds": []}
@@ -51,8 +55,7 @@ def cross_validate(fit_score, y, folds):
         start = time.time()
         s_train, s_test = fit_score(train, test)
         res["seconds"].append(time.time() - start)
-        known = ~np.isnan(s_train)
-        t = best_threshold(y[train][known], s_train[known])
+        t = best_threshold(y[train], s_train)
         f1, acc = f1_accuracy(y[test], s_test >= t)
         res["f1"].append(f1)
         res["accuracy"].append(acc)

@@ -1,8 +1,9 @@
 """Cross-validation experiments behind the tables and the figure of the report.
 
 `python experiments.py [final] [methods] [ablations] [gbdt]` runs the chosen groups
-(all by default, about three hours). Every experiment is saved to results/<name>.json
-and the figure to report/threshold.pdf.
+(all by default: three to four hours, of which gbdt takes almost two). The logistic
+regression baseline, the reference of the paired deltas, is always run. Every
+experiment is saved to results/<name>.json, the figure to report/threshold.pdf.
 """
 
 import os
@@ -79,10 +80,7 @@ FITS = [
     ),
 ]
 
-# Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
-GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
-
-# Each ablation changes one part of the final model.
+# Each ablation changes one part of the logistic regression baseline.
 ABLATIONS = [
     ("no_decoding", {"decoded": False}),
     ("no_extra_questions", {"removed": EXTRA_QUESTIONS}),
@@ -92,6 +90,11 @@ ABLATIONS = [
     ("lambda_1", {"lam": 1.0}),
     ("lambda_100", {"lam": 100.0}),
 ]
+
+# Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
+GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
+
+GROUPS = ["final", "methods", "ablations", "gbdt"]
 
 
 def linear_scores(fit, x_fit, y_fit, x_apply):
@@ -120,7 +123,7 @@ def evaluate(name, scores_fn, x, y, folds, config, reference=None):
 
 
 def fixed_threshold(y, folds, oof, reference):
-    """Score the out-of-fold logits of the final model with probability 0.5."""
+    """Score the out-of-fold logits of the baseline with probability 0.5."""
     res = {"f1": [], "accuracy": []}
     for k in range(folds.max() + 1):
         f1, acc = cv.f1_accuracy(y[folds == k], oof[folds == k] >= 0)
@@ -154,8 +157,8 @@ def main(groups):
     os.chdir(os.path.dirname(os.path.abspath(__file__)))  # paths are relative to here
     x, _, y, _ = features.load_data(run.DATA_DIR)
     folds = cv.stratified_folds(y)
-    final = {"lam": run.LAMBDA, "gamma": run.GAMMA, "max_iters": run.MAX_ITERS}
-    ref, oof = evaluate("logistic", run.logistic_scores, x, y, folds, final)
+    baseline = {"lam": run.LAMBDA, "gamma": run.GAMMA, "max_iters": run.MAX_ITERS}
+    ref, oof = evaluate("logistic", run.logistic_scores, x, y, folds, baseline)
 
     if "final" in groups:
         plot_threshold(y, folds, oof, ref, "report/threshold.pdf")
@@ -163,7 +166,7 @@ def main(groups):
         # All choices were made on the folds of seed 42: check on unseen folds.
         new_folds = cv.stratified_folds(y, seed=43)
         ref43, _ = evaluate(
-            "logistic_seed43", run.logistic_scores, x, y, new_folds, final
+            "logistic_seed43", run.logistic_scores, x, y, new_folds, baseline
         )
         config = {"depth": run.DEPTH, "rate": run.RATE}
         evaluate("gbdt_seed43", run.gbdt_scores, x, y, new_folds, config, ref43)
@@ -181,7 +184,8 @@ def main(groups):
             if "removed" in options:
                 x_ablation = without(x, options.pop("removed"))
             scores_fn = partial(run.logistic_scores, **options)
-            evaluate(name, scores_fn, x_ablation, y, folds, {**final, **change}, ref)
+            config = {**baseline, **change}
+            evaluate(name, scores_fn, x_ablation, y, folds, config, ref)
 
     if "gbdt" in groups:
         for depth, rate in GBDT_GRID:
@@ -193,4 +197,6 @@ def main(groups):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or ["final", "methods", "ablations", "gbdt"])
+    if not set(sys.argv[1:]) <= set(GROUPS):
+        sys.exit("usage: python experiments.py [final] [methods] [ablations] [gbdt]")
+    main(sys.argv[1:] or GROUPS)

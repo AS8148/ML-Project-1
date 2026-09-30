@@ -1,4 +1,4 @@
-"""Train the final model on the whole training set and write submission.csv."""
+"""Train the final model on the training set and write submission.csv."""
 
 import os
 
@@ -35,16 +35,18 @@ def logistic_scores(x_fit, y_fit, x_apply, lam=LAMBDA, **options):
 
 
 def gbdt_scores(x_fit, y_fit, x_apply, depth=DEPTH, rate=RATE):
-    """Boost trees on 80% of x_fit, stopping early on the other 20%.
+    """Boost trees on 80% of x_fit, stopping early on the other 20% (valid).
 
-    The scores of x_fit are NaN outside that 20%, where the threshold is chosen.
+    Returns the logits of x_fit and x_apply. Those of x_fit are NaN outside valid,
+    so that the decision threshold is chosen on valid only.
     """
-    held = cv.stratified_folds(y_fit, seed=1) == 0
-    params = {"depth": depth, "rate": rate}
-    model = gbdt.fit(x_fit[~held], y_fit[~held], x_fit[held], y_fit[held], **params)
+    valid = cv.stratified_folds(y_fit, seed=1) == 0
+    model = gbdt.fit(
+        x_fit[~valid], y_fit[~valid], x_fit[valid], y_fit[valid], depth=depth, rate=rate
+    )
     print(f"  {len(model[3])} trees")
     s_fit = np.full(len(y_fit), np.nan)
-    s_fit[held] = gbdt.predict(model, x_fit[held])
+    s_fit[valid] = gbdt.predict(model, x_fit[valid])
     return s_fit, gbdt.predict(model, x_apply)
 
 
@@ -52,8 +54,7 @@ def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))  # paths are relative to here
     x_train, x_test, y, test_ids = features.load_data(DATA_DIR)
     s_train, s_test = gbdt_scores(x_train, y, x_test)
-    held = ~np.isnan(s_train)
-    threshold = cv.best_threshold(y[held], s_train[held])
+    threshold = cv.best_threshold(y, s_train)
     pred = np.where(s_test >= threshold, 1, -1)
     create_csv_submission(test_ids, pred, "submission.csv")
     print(f"threshold {threshold:.4f}, positive rate {np.mean(pred == 1):.4f}")
