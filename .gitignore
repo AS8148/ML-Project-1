@@ -6,3 +6,6 @@ __pycache__/
 .ipynb_checkpoints/
 .idea/
 .DS_Store
+
+# Cached out-of-fold scores of tuning.py (large, regenerable)
+results/cache/

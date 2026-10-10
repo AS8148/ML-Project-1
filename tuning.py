@@ -28,11 +28,15 @@ from data_cleaning import (
 )
 from implementations import reg_logistic_regression, ridge_regression
 from models import (
+    apply_bins,
     apply_expansion,
+    fit_bins,
     fit_expansion,
     logistic_newton,
+    predict_gbdt,
     predict_mlp,
     sigmoid,
+    train_gbdt,
     train_mlp,
 )
 
@@ -168,12 +172,12 @@ def logistic_gd(lambda_=1e-4, iters=300, gamma=0.5):
     return fit_predict
 
 
-def mlp(n_models=1, **kwargs):
+def mlp(n_models=1, first_seed=0, **kwargs):
     """Average of `n_models` networks trained with different seeds."""
 
     def fit_predict(y, tx, tx_val, is_cont=None):
         s_tr, s_val = 0.0, 0.0
-        for seed in range(n_models):
+        for seed in range(first_seed, first_seed + n_models):
             p = train_mlp(y, tx, seed=seed, **kwargs)
             s_tr = s_tr + predict_mlp(tx, p) / n_models
             s_val = s_val + predict_mlp(tx_val, p) / n_models
@@ -339,6 +343,241 @@ def stage_f(folds):
         )
 
 
+# ---------------------------------------------------------------------------
+# Stage G: gradient-boosted trees, better networks, 3-model blends.
+# Out-of-fold (OOF) scores are cached in results/cache/ and the threshold is
+# chosen on the OOF predictions (one threshold for all folds, as in run.py),
+# because trees fit their training rows too well for a train-fold threshold.
+# ---------------------------------------------------------------------------
+
+CACHE = "results/cache"
+THRESHOLDS = np.linspace(0.05, 0.6, 221)
+
+
+def save_scores(name, scores):
+    """Cache per-fold (train or None, validation) scores."""
+    os.makedirs(CACHE, exist_ok=True)
+    arrays = {}
+    for i, (s_tr, s_val) in enumerate(scores):
+        arrays[f"val{i}"] = s_val
+        if s_tr is not None:
+            arrays[f"tr{i}"] = s_tr
+    np.savez(os.path.join(CACHE, name + ".npz"), **arrays)
+
+
+def load_scores(name):
+    """Validation scores of every fold from the cache."""
+    d = np.load(os.path.join(CACHE, name + ".npz"))
+    return [d[f"val{i}"] for i in range(K_FOLD)]
+
+
+def evaluate_oof(y, val_scores, elapsed=0.0):
+    """F1 per fold with one threshold maximizing the F1 of all OOF scores."""
+    folds = stratified_k_indices(y, K_FOLD, SEED)
+    y_all = np.concatenate([y[f] for f in folds])
+    s_all = np.concatenate(val_scores)
+    thr, _ = best_threshold(y_all, s_all, THRESHOLDS)
+    f1s = np.array(
+        [f1_score(y[f], (s >= thr).astype(int)) for f, s in zip(folds, val_scores)]
+    )
+    return {
+        "f1": f1s,
+        "mean": f1s.mean(),
+        "std": f1s.std(),
+        "thresholds": np.array([thr]),
+        "time": elapsed,
+    }
+
+
+def stage_g0(y):
+    """Cache the OOF scores of the current best logistic model and networks."""
+    folds = best_folds()
+    lin = evaluate(folds, expanded(newton(1e-4), squares=True, n_interact=20))
+    save_scores("logistic_exp", lin["scores"])
+    log(
+        "G oof",
+        "logistic Newton, squares + 20 interactions",
+        evaluate_oof(y, [v for _, v in lin["scores"]], lin["time"]),
+    )
+    kw = dict(hidden=(128, 64), epochs=4, lr=1e-3, l2=1e-4, dropout=0.2)
+    for seed in range(10):
+        res = evaluate(folds, mlp(first_seed=seed, **kw))
+        save_scores(f"mlp128_64_s{seed}", res["scores"])
+        log(
+            "G oof",
+            f"MLP (128, 64) dropout 0.2, seed {seed}",
+            evaluate_oof(y, [v for _, v in res["scores"]], res["time"]),
+        )
+    for n in [5, 10]:
+        avg = [
+            np.mean([load_scores(f"mlp128_64_s{s}")[i] for s in range(n)], axis=0)
+            for i in range(K_FOLD)
+        ]
+        log(
+            "G oof",
+            f"MLP (128, 64) dropout 0.2, mean of {n} seeds",
+            evaluate_oof(y, avg),
+        )
+
+
+GBDT_CONFIGS = {
+    "d6_lr05": dict(
+        max_depth=6, lr=0.05, min_child_weight=10, reg_lambda=1.0, n_trees=500
+    ),
+    "d4_lr1": dict(
+        max_depth=4, lr=0.1, min_child_weight=10, reg_lambda=1.0, n_trees=600
+    ),
+    "d8_lr05": dict(
+        max_depth=8, lr=0.05, min_child_weight=50, reg_lambda=5.0, n_trees=400
+    ),
+    "d6_lr03": dict(
+        max_depth=6, lr=0.03, min_child_weight=20, reg_lambda=2.0, n_trees=600
+    ),
+}
+
+
+def stage_g1(x, y, names):
+    """Gradient-boosted trees on the decoded raw columns (NaN = own bin)."""
+    folds = stratified_k_indices(y, K_FOLD, SEED)
+    for name in names:
+        cfg = dict(GBDT_CONFIGS[name])
+        n_trees = cfg["n_trees"]
+        checkpoints = list(range(50, n_trees + 1, 50))
+        staged = {c: [] for c in checkpoints}
+        t0 = time.time()
+        for f in range(K_FOLD):
+            va = folds[f]
+            tr = np.concatenate([folds[i] for i in range(K_FOLD) if i != f])
+            edges = fit_bins(x[tr])
+            model = train_gbdt(
+                y[tr],
+                apply_bins(x[tr], edges),
+                subsample=0.5,
+                colsample=0.5,
+                seed=f,
+                **cfg,
+            )
+            pred = predict_gbdt(apply_bins(x[va], edges), model, checkpoints)
+            for c in checkpoints:
+                staged[c].append(pred[c])
+            print(f"  gbdt {name} fold {f + 1}: {time.time() - t0:.0f}s", flush=True)
+        for c in checkpoints:
+            save_scores(f"gbdt_{name}_{c}", [(None, s) for s in staged[c]])
+            desc = ", ".join(f"{k}={v}" for k, v in cfg.items() if k != "n_trees")
+            log(
+                "G gbdt",
+                f"GBDT {desc}, {c} trees",
+                evaluate_oof(y, staged[c], time.time() - t0),
+            )
+
+
+def stage_g4(x, y, name, n_trees, seeds):
+    """Extra seeds of one GBDT configuration (bagging over the random subsamples)."""
+    folds = stratified_k_indices(y, K_FOLD, SEED)
+    cfg = dict(GBDT_CONFIGS[name], n_trees=n_trees)
+    for seed in seeds:
+        t0 = time.time()
+        scores = []
+        for f in range(K_FOLD):
+            va = folds[f]
+            tr = np.concatenate([folds[i] for i in range(K_FOLD) if i != f])
+            edges = fit_bins(x[tr])
+            model = train_gbdt(
+                y[tr],
+                apply_bins(x[tr], edges),
+                subsample=0.5,
+                colsample=0.5,
+                seed=100 * seed + f,
+                **cfg,
+            )
+            scores.append((None, predict_gbdt(apply_bins(x[va], edges), model)))
+        save_scores(f"gbdt_{name}_{n_trees}_seed{seed}", scores)
+        log(
+            "G gbdt",
+            f"GBDT {name}, {n_trees} trees, seed {seed}",
+            evaluate_oof(y, [v for _, v in scores], time.time() - t0),
+        )
+
+
+def stage_g2(y):
+    """Networks with a cosine learning-rate schedule and longer training."""
+    folds = best_folds()
+    grid = {
+        "mlp128_64_cos6": dict(
+            hidden=(128, 64),
+            epochs=6,
+            lr=1e-3,
+            l2=1e-4,
+            dropout=0.2,
+            lr_schedule="cosine",
+        ),
+        "mlp256_128_cos6": dict(
+            hidden=(256, 128),
+            epochs=6,
+            lr=1e-3,
+            l2=1e-4,
+            dropout=0.3,
+            lr_schedule="cosine",
+        ),
+        "mlp512_256_cos8": dict(
+            hidden=(512, 256),
+            epochs=8,
+            lr=5e-4,
+            l2=1e-4,
+            dropout=0.4,
+            lr_schedule="cosine",
+        ),
+    }
+    for name, kw in grid.items():
+        res = evaluate(folds, mlp(**kw))
+        save_scores(name + "_s0", res["scores"])
+        desc = ", ".join(f"{k}={v}" for k, v in kw.items())
+        log(
+            "G mlp",
+            f"MLP {desc}",
+            evaluate_oof(y, [v for _, v in res["scores"]], res["time"]),
+        )
+
+
+def stage_g5(y, seeds):
+    """More seeds of the network with a cosine learning-rate schedule."""
+    folds = best_folds()
+    kw = dict(
+        hidden=(128, 64), epochs=6, lr=1e-3, l2=1e-4, dropout=0.2, lr_schedule="cosine"
+    )
+    for seed in seeds:
+        res = evaluate(folds, mlp(first_seed=seed, **kw))
+        save_scores(f"mlp128_64_cos6_s{seed}", res["scores"])
+        log(
+            "G mlp",
+            f"MLP (128, 64) cosine 6 epochs, seed {seed}",
+            evaluate_oof(y, [v for _, v in res["scores"]], res["time"]),
+        )
+
+
+def stage_g3(y, members):
+    """Blends of cached OOF scores: grid over weights summing to one (step 0.1)."""
+    scores = {}
+    for name, parts in members.items():
+        lists = [load_scores(p) for p in parts]
+        scores[name] = [np.mean([l[i] for l in lists], axis=0) for i in range(K_FOLD)]
+        log("G blend", f"member {name}", evaluate_oof(y, scores[name]))
+    names = list(scores)
+    steps = np.round(np.arange(0, 1.01, 0.1), 2)
+    results = []
+    for w in np.array(np.meshgrid(*[steps] * len(names))).T.reshape(-1, len(names)):
+        if abs(w.sum() - 1) > 1e-9 or (w > 0).sum() < 2:
+            continue
+        blended = [
+            sum(wk * scores[n][i] for wk, n in zip(w, names)) for i in range(K_FOLD)
+        ]
+        results.append((w, evaluate_oof(y, blended)))
+    results.sort(key=lambda r: -r[1]["mean"])
+    for w, res in results[:5]:
+        desc = " + ".join(f"{wk:g} {n}" for wk, n in zip(w, names) if wk > 0)
+        log("G blend", desc, res)
+
+
 if __name__ == "__main__":
     os.makedirs("results", exist_ok=True)
     stages = sys.argv[1:] or ["A", "B", "C", "D", "E"]
@@ -348,6 +587,21 @@ if __name__ == "__main__":
             f.write("|---|---|---|---|---|---|\n")
     if "A" in stages:
         stage_a()
+    if any(st.startswith("G") for st in stages):
+        x_raw, y_raw, _ = load_decoded(keep_state=True)
+        if "G0" in stages:
+            stage_g0(y_raw)
+        if "G1" in stages:
+            stage_g1(x_raw, y_raw, ["d6_lr05", "d4_lr1", "d8_lr05"])
+        if "G6" in stages:
+            stage_g1(x_raw, y_raw, ["d6_lr03"])
+        if "G2" in stages:
+            stage_g2(y_raw)
+        if "G5" in stages:
+            stage_g5(y_raw, seeds=range(1, 8))
+        if "G4" in stages:
+            stage_g4(x_raw, y_raw, "d6_lr05", 300, seeds=[1, 2, 3, 4])
+        sys.exit()
     folds = best_folds() if set(stages) - {"A"} else None
     if "B" in stages:
         stage_b(folds)

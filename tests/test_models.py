@@ -120,3 +120,60 @@ def test_expansion_shapes_and_scaling():
     # the two features used to build y are among the interacting ones
     used = {i for pair in exp["pairs"] for i in pair}
     assert {1, 2} <= used
+
+
+def test_bins():
+    x = np.c_[np.arange(1000.0), np.repeat([0.0, 1.0], 500)]
+    x[:10, 0] = np.nan
+    edges = models.fit_bins(x, max_bins=10)
+    xb = models.apply_bins(x, edges)
+    assert xb.dtype == np.uint8
+    np.testing.assert_array_equal(xb[:10, 0], 0)  # NaN -> bin 0
+    assert len(np.unique(xb[10:, 0])) == 9  # quantile bins 1..9 of a continuous feature
+    np.testing.assert_array_equal(np.unique(xb[:, 1]), [1, 2])  # binary feature
+    assert np.all(np.diff(xb[10:, 0].astype(int)) >= 0)  # bins are monotone
+
+
+def test_gbdt_learns_step_and_xor():
+    rng = np.random.default_rng(0)
+    n = 4000
+    x = rng.normal(size=(n, 3))
+    y = ((x[:, 0] > 0.5) ^ (x[:, 1] > 0)).astype(float)  # XOR of two steps
+    xb = models.apply_bins(x, models.fit_bins(x, max_bins=32))
+    model = models.train_gbdt(
+        y, xb, n_trees=50, lr=0.3, max_depth=3, subsample=1.0, colsample=1.0, n_bins=32
+    )
+    acc = np.mean((models.predict_gbdt(xb, model) > 0.5) == y)
+    assert acc > 0.97
+    # the first trees only split on the two informative features (not the noise x[:, 2])
+    used = np.concatenate([t["feature"][t["feature"] >= 0] for t in model["trees"][:5]])
+    assert set(used.tolist()) <= {0, 1}
+
+
+def test_gbdt_loss_decreases_and_staged_predictions():
+    rng = np.random.default_rng(1)
+    n = 3000
+    x = rng.normal(size=(n, 4))
+    y = (rng.uniform(size=n) < models.sigmoid(x[:, 0] - x[:, 1] ** 2)).astype(float)
+    xb = models.apply_bins(x, models.fit_bins(x, max_bins=32))
+    model = models.train_gbdt(y, xb, n_trees=40, lr=0.1, max_depth=3, n_bins=32)
+    staged = models.predict_gbdt(xb, model, checkpoints=[10, 20, 40])
+
+    def loss(p):
+        return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+    assert loss(staged[10]) > loss(staged[20]) > loss(staged[40])
+    np.testing.assert_allclose(staged[40], models.predict_gbdt(xb, model))
+
+
+def test_gbdt_min_child_weight_limits_leaves():
+    rng = np.random.default_rng(2)
+    n = 500
+    x = rng.normal(size=(n, 2))
+    y = (rng.uniform(size=n) < 0.3).astype(float)
+    xb = models.apply_bins(x, models.fit_bins(x, max_bins=16))
+    # min_child_weight larger than half the total hessian: no split possible
+    model = models.train_gbdt(
+        y, xb, n_trees=3, max_depth=4, min_child_weight=1e6, subsample=1.0, n_bins=16
+    )
+    assert all(len(t["feature"]) == 1 for t in model["trees"])

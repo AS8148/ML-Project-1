@@ -99,6 +99,7 @@ def train_mlp(
     pos_weight=1.0,
     seed=0,
     dropout=0.0,
+    lr_schedule="constant",
 ):
     """Train a fully-connected ReLU network with a sigmoid output.
 
@@ -118,6 +119,8 @@ def train_mlp(
         pos_weight: weight of the positive class.
         seed: random seed (initialization, shuffling and dropout).
         dropout: probability of dropping a hidden unit during training.
+        lr_schedule: "constant" or "cosine" (learning rate decayed from lr to 0
+            along a half cosine over the whole training).
 
     Returns:
         dict of parameters {"W1", "b1", ..., "WL", "bL"}; the last layer has a
@@ -140,6 +143,7 @@ def train_mlp(
     beta1, beta2, eps, step = 0.9, 0.999, 1e-8, 0
     s_all = np.where(y == 1, pos_weight, 1.0)
     s_all = s_all / s_all.mean()
+    total_steps = epochs * int(np.ceil(n / batch_size))
 
     for _ in range(epochs):
         perm = rng.permutation(n)
@@ -150,12 +154,15 @@ def train_mlp(
             )
             # Adam update
             step += 1
+            lr_t = lr
+            if lr_schedule == "cosine":
+                lr_t = lr * 0.5 * (1 + np.cos(np.pi * (step - 1) / total_steps))
             for k in params:
                 m[k] = beta1 * m[k] + (1 - beta1) * grads[k]
                 v[k] = beta2 * v[k] + (1 - beta2) * grads[k] ** 2
                 m_hat = m[k] / (1 - beta1**step)
                 v_hat = v[k] / (1 - beta2**step)
-                params[k] = params[k] - lr * m_hat / (np.sqrt(v_hat) + eps)
+                params[k] = params[k] - lr_t * m_hat / (np.sqrt(v_hat) + eps)
     return params
 
 
@@ -259,3 +266,262 @@ def apply_expansion(tx, exp):
     """Append the standardized extra features chosen by `fit_expansion`."""
     extra = (_expansion_features(tx, exp) - exp["mean"]) / exp["std"]
     return np.hstack([tx, extra])
+
+
+# ---------------------------------------------------------------------------
+# Gradient-boosted decision trees (histogram-based, logistic loss)
+# ---------------------------------------------------------------------------
+
+
+def fit_bins(x, max_bins=64, sample=100000, seed=0):
+    """Bin edges of every feature (fitted on training data).
+
+    Bin 0 is reserved for missing values (NaN), so that trees can split
+    "missing" vs "observed". Features with few distinct values get one bin per
+    value; the others get quantile bins computed on a random subsample of rows.
+
+    Args:
+        x: (N, D) features, may contain NaN.
+        max_bins: total number of bins per feature, including the NaN bin (<= 256).
+        sample: number of rows used to compute the quantiles.
+        seed: random seed of the subsample.
+
+    Returns:
+        list of D arrays of increasing bin edges.
+    """
+    rng = np.random.default_rng(seed)
+    rows = rng.choice(len(x), min(len(x), sample), replace=False)
+    edges = []
+    for j in range(x.shape[1]):
+        col = x[rows, j]
+        col = col[~np.isnan(col)]
+        values = np.unique(col)
+        if len(values) <= max_bins - 1:
+            edges.append((values[:-1] + values[1:]) / 2)
+        else:
+            q = np.linspace(0, 1, max_bins)[1:-1]
+            edges.append(np.unique(np.quantile(col, q)))
+    return edges
+
+
+def apply_bins(x, edges):
+    """Bin index of every value (uint8): 0 for NaN, else 1 + number of edges <= value."""
+    out = np.empty(x.shape, dtype=np.uint8)
+    for j, e in enumerate(edges):
+        col = x[:, j]
+        b = np.searchsorted(e, col, side="right") + 1
+        b[np.isnan(col)] = 0
+        out[:, j] = b
+    return out
+
+
+def _histograms(xs_t, rows, local_node, g, h, n_nodes, n_bins):
+    """Gradient / hessian histograms of several nodes at once.
+
+    Args:
+        xs_t: (K, M) binned features of the tree's rows (one row per feature).
+        rows: indices (into M) of the rows to count.
+        local_node: node number (0 .. n_nodes-1) of each of these rows.
+        g, h: (M,) gradients and hessians.
+
+    Returns:
+        two arrays of shape (n_nodes, K, n_bins).
+    """
+    k = xs_t.shape[0]
+    hg = np.empty((n_nodes, k, n_bins))
+    hh = np.empty((n_nodes, k, n_bins))
+    base = local_node * n_bins
+    g_r, h_r = g[rows], h[rows]
+    size = n_nodes * n_bins
+    for j in range(k):
+        key = base + xs_t[j, rows]
+        hg[:, j, :] = np.bincount(key, weights=g_r, minlength=size).reshape(
+            n_nodes, n_bins
+        )
+        hh[:, j, :] = np.bincount(key, weights=h_r, minlength=size).reshape(
+            n_nodes, n_bins
+        )
+    return hg, hh
+
+
+def _build_tree(
+    xb, rows, feats, g, h, max_depth, min_child_weight, reg_lambda, lr, n_bins
+):
+    """Grow one regression tree on the gradients (depth-wise, exact on bins).
+
+    Split gain (second-order / XGBoost formula):
+        GL^2 / (HL + lambda) + GR^2 / (HR + lambda) - G^2 / (H + lambda),
+    leaf value: -lr * G / (H + lambda).
+
+    Returns:
+        dict of node arrays: feature (-1 for leaves), threshold bin (go left if
+        bin <= threshold), left / right children and value.
+    """
+    xs_t = np.ascontiguousarray(xb[np.ix_(rows, feats)].T)  # (K, M)
+    gs, hs = g[rows], h[rows]
+    m = len(rows)
+    n_max = 2 ** (max_depth + 1)
+    feature = np.full(n_max, -1)
+    threshold = np.zeros(n_max, dtype=np.int64)
+    left = np.zeros(n_max, dtype=np.int64)
+    right = np.zeros(n_max, dtype=np.int64)
+    value = np.zeros(n_max)
+
+    all_rows = np.arange(m)
+    hg, hh = _histograms(xs_t, all_rows, np.zeros(m, dtype=np.int64), gs, hs, 1, n_bins)
+    # level: list of (node id, row indices, grad hist, hess hist)
+    level = [(0, all_rows, hg[0], hh[0])]
+    next_id = 1
+    for depth in range(max_depth + 1):
+        splits = []
+        for node, node_rows, ng, nh in level:
+            G, H = ng[0].sum(), nh[0].sum()
+            value[node] = -lr * G / (H + reg_lambda)
+            if depth == max_depth or H < 2 * min_child_weight:
+                continue
+            gl = np.cumsum(ng, axis=1)[:, :-1]
+            hl = np.cumsum(nh, axis=1)[:, :-1]
+            gr, hr = G - gl, H - hl
+            gain = gl**2 / (hl + reg_lambda) + gr**2 / (hr + reg_lambda)
+            gain[(hl < min_child_weight) | (hr < min_child_weight)] = -np.inf
+            best = int(np.argmax(gain))
+            j, b = divmod(best, n_bins - 1)
+            if not gain[j, b] - G**2 / (H + reg_lambda) > 1e-10:
+                continue
+            go_left = xs_t[j, node_rows] <= b
+            feature[node], threshold[node] = feats[j], b
+            left[node], right[node] = next_id, next_id + 1
+            next_id += 2
+            splits.append((node, j, node_rows[go_left], node_rows[~go_left], ng, nh))
+        if not splits:
+            break
+        # Histograms of the smaller child of each split, the sibling by subtraction
+        small_rows, small_ids = [], []
+        for i, (_, _, lr_rows, rr_rows, _, _) in enumerate(splits):
+            small = lr_rows if len(lr_rows) <= len(rr_rows) else rr_rows
+            small_rows.append(small)
+            small_ids.append(np.full(len(small), i, dtype=np.int64))
+        hg, hh = _histograms(
+            xs_t,
+            np.concatenate(small_rows),
+            np.concatenate(small_ids),
+            gs,
+            hs,
+            len(splits),
+            n_bins,
+        )
+        level = []
+        for i, (node, _, lr_rows, rr_rows, ng, nh) in enumerate(splits):
+            if len(lr_rows) <= len(rr_rows):
+                lg, lh, rg, rh = hg[i], hh[i], ng - hg[i], nh - hh[i]
+            else:
+                rg, rh, lg, lh = hg[i], hh[i], ng - hg[i], nh - hh[i]
+            level.append((left[node], lr_rows, lg, lh))
+            level.append((right[node], rr_rows, rg, rh))
+    return {
+        "feature": feature[:next_id],
+        "threshold": threshold[:next_id],
+        "left": left[:next_id],
+        "right": right[:next_id],
+        "value": value[:next_id],
+    }
+
+
+def _predict_tree(tree, xb):
+    """Output of one tree for binned features xb (N, D)."""
+    node = np.zeros(len(xb), dtype=np.int64)
+    rows = np.arange(len(xb))
+    feature = tree["feature"]
+    while True:
+        f = feature[node]
+        internal = f >= 0
+        if not internal.any():
+            break
+        idx = rows[internal]
+        nd = node[idx]
+        go_left = xb[idx, f[internal]] <= tree["threshold"][nd]
+        node[idx] = np.where(go_left, tree["left"][nd], tree["right"][nd])
+    return tree["value"][node]
+
+
+def train_gbdt(
+    y,
+    xb,
+    n_trees=300,
+    lr=0.1,
+    max_depth=6,
+    min_child_weight=10.0,
+    reg_lambda=1.0,
+    subsample=0.7,
+    colsample=0.5,
+    n_bins=64,
+    seed=0,
+):
+    """Gradient boosting of regression trees for the logistic loss.
+
+    At each round, the gradient g = p - y and hessian h = p (1 - p) of the
+    logistic loss are computed for the current scores, and a tree fitted to
+    them (second-order step) is added with shrinkage `lr`. Each tree sees a
+    random fraction `subsample` of the rows and `colsample` of the features.
+
+    Args:
+        y: (N,) labels in {0, 1}.
+        xb: (N, D) binned features (uint8, from `apply_bins`).
+        n_trees: number of boosting rounds.
+        lr: shrinkage (learning rate).
+        max_depth: maximum depth of each tree.
+        min_child_weight: minimum hessian sum in a leaf.
+        reg_lambda: L2 regularization of the leaf values.
+        subsample: fraction of rows used by each tree.
+        colsample: fraction of features used by each tree.
+        n_bins: number of histogram bins (>= max bin index + 1).
+        seed: random seed.
+
+    Returns:
+        dict {"base": initial score, "trees": list of trees}.
+    """
+    rng = np.random.default_rng(seed)
+    n, d = xb.shape
+    p0 = np.clip(y.mean(), 1e-6, 1 - 1e-6)
+    base = float(np.log(p0 / (1 - p0)))
+    f = np.full(n, base)
+    trees = []
+    n_rows = max(1, int(subsample * n))
+    n_feats = max(1, int(colsample * d))
+    for _ in range(n_trees):
+        p = sigmoid(f)
+        g, h = p - y, p * (1 - p)
+        rows = (
+            np.sort(rng.choice(n, n_rows, replace=False))
+            if subsample < 1
+            else np.arange(n)
+        )
+        feats = np.sort(rng.choice(d, n_feats, replace=False))
+        tree = _build_tree(
+            xb, rows, feats, g, h, max_depth, min_child_weight, reg_lambda, lr, n_bins
+        )
+        f += _predict_tree(tree, xb)
+        trees.append(tree)
+    return {"base": base, "trees": trees}
+
+
+def predict_gbdt(xb, model, checkpoints=None):
+    """Predicted probabilities of a boosted model.
+
+    Args:
+        xb: (N, D) binned features.
+        model: output of `train_gbdt`.
+        checkpoints: optional list of numbers of trees; if given, returns a dict
+            {n_trees: probabilities using only the first n_trees trees}.
+    """
+    f = np.full(len(xb), model["base"])
+    if checkpoints is None:
+        for tree in model["trees"]:
+            f += _predict_tree(tree, xb)
+        return sigmoid(f)
+    out = {}
+    for t, tree in enumerate(model["trees"], start=1):
+        f += _predict_tree(tree, xb)
+        if t in checkpoints:
+            out[t] = sigmoid(f)
+    return out
