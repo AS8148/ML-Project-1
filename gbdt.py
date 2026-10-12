@@ -44,18 +44,24 @@ def _score(gh, lam):
 
 
 def _grow(codes, g, h, cols, depth, lam, min_hess, n_codes):
-    """Grow one tree (feature, split, missing_right, leaf values) in heap order."""
+    """Grow one tree (feature, split, missing_right, leaf values) in heap order.
+
+    Only the features in cols are read from codes.
+    """
     n_splits = 2**depth - 1
     feature = np.zeros(n_splits, dtype=int)
     split = np.full(n_splits, 255)  # known codes <= split go left (255: no split)
     missing_right = np.zeros(n_splits, dtype=bool)
     node = np.zeros(len(g), dtype=int)
+    index = np.empty_like(node)  # reused for key + codes[j]
     for level in range(depth):
         first, n_nodes = 2**level - 1, 2**level
         # Histograms of (g, h) over (node, feature, code), one bincount per feature.
         key, size = (node - first) * n_codes, n_nodes * n_codes
-        index = [key + codes[j] for j in cols]
-        hist = np.array([[np.bincount(i, w, size) for i in index] for w in (g, h)])
+        hist = np.empty((2, len(cols), size))
+        for k, j in enumerate(cols):
+            np.add(key, codes[j], out=index)
+            hist[:, k] = [np.bincount(index, w, size) for w in (g, h)]
         hist = hist.reshape(2, len(cols), n_nodes, n_codes).transpose(0, 2, 1, 3)
         # Split after code t: known codes 1..t go left, missing ones on either side.
         miss, known = hist[..., :1], np.cumsum(hist[..., 1:], -1)
@@ -109,7 +115,12 @@ def fit(
         rows = np.flatnonzero(rng.random(len(y)) < subsample)
         cols = np.sort(rng.choice(x.shape[1], n_cols, replace=False))
         g, h = (p - y)[rows], (p * (1 - p))[rows]
-        tree = _grow(codes[:, rows], g, h, cols, depth, lam, min_hess, n_bins + 1)
+        # Contiguous copy of the sampled rows, for the sampled columns only
+        # (codes[:, rows] is column-major, which makes the histograms slow).
+        sub = np.zeros((len(codes), len(rows)), dtype=np.uint8)
+        for j in cols:
+            sub[j] = codes[j, rows]
+        tree = _grow(sub, g, h, cols, depth, lam, min_hess, n_bins + 1)
         trees.append(tree)
         score += rate * _predict_tree(codes, tree)
         score_valid += rate * _predict_tree(codes_valid, tree)

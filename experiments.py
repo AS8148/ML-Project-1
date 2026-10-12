@@ -1,9 +1,11 @@
 """Cross-validation experiments behind the tables and the figure of the report.
 
-`python experiments.py [final] [methods] [ablations] [gbdt]` runs the chosen groups
-(all by default: three to four hours, of which gbdt takes almost two). The logistic
-regression baseline, the reference of the paired deltas, is always run. Every
-experiment is saved to results/<name>.json, the figure to report/threshold.pdf.
+`python experiments.py [final] [methods] [ablations] [gbdt] [scores]` runs the chosen
+groups (by default all but scores, which repeats runs of final and gbdt: three to
+four hours, of which gbdt takes almost two). The logistic regression baseline, the
+reference of the paired deltas, is always run. Every experiment is saved to
+results/<name>.json, its test and training scores to results/oof_<name>.npy and
+oof_<name>_fit.npy, the figure to report/threshold.pdf.
 """
 
 import os
@@ -94,7 +96,7 @@ ABLATIONS = [
 # Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
 GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
 
-GROUPS = ["final", "methods", "ablations", "gbdt"]
+GROUPS = ["final", "methods", "ablations", "gbdt", "scores"]
 
 
 def linear_scores(fit, x_fit, y_fit, x_apply):
@@ -113,12 +115,17 @@ def without(x, names):
 
 
 def evaluate(name, scores_fn, x, y, folds, config, reference=None):
-    """Cross-validate scores_fn(x_fit, y_fit, x_apply); print, save and return it."""
-    res, oof = cv.cross_validate(
+    """Cross-validate scores_fn(x_fit, y_fit, x_apply) and print the result.
+
+    Saves the results and the scores (see the module docstring); returns (res, oof).
+    """
+    res, oof, fit = cv.cross_validate(
         lambda tr, te: scores_fn(x[tr], y[tr], x[te]), y, folds
     )
     print(f"{name}:", cv.summary(res, reference))
     cv.save_result(name, config, res)
+    np.save(f"results/oof_{name}.npy", oof)
+    np.save(f"results/oof_{name}_fit.npy", fit)
     return res, oof
 
 
@@ -195,8 +202,18 @@ def main(groups):
                 f"gbdt_depth{depth}_rate{rate}", scores_fn, x, y, folds, config, ref
             )
 
+    if "scores" in groups:
+        # The final gradient boosting again, to save its scores on both fold seeds.
+        # The baseline of seed 43 is read from its saved results (group final).
+        ref43 = cv.load_result("logistic_seed43")
+        new_folds = cv.stratified_folds(y, seed=43)
+        config = {"depth": run.DEPTH, "rate": run.RATE}
+        name = f"gbdt_depth{run.DEPTH}_rate{run.RATE}"
+        evaluate(name, run.gbdt_scores, x, y, folds, config, ref)
+        evaluate("gbdt_seed43", run.gbdt_scores, x, y, new_folds, config, ref43)
+
 
 if __name__ == "__main__":
     if not set(sys.argv[1:]) <= set(GROUPS):
-        sys.exit("usage: python experiments.py [final] [methods] [ablations] [gbdt]")
-    main(sys.argv[1:] or GROUPS)
+        sys.exit("usage: python experiments.py " + " ".join(f"[{g}]" for g in GROUPS))
+    main(sys.argv[1:] or GROUPS[:-1])

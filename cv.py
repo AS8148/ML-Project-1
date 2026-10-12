@@ -45,23 +45,34 @@ def best_threshold(y, scores):
 def cross_validate(fit_score, y, folds):
     """Cross-validate fit_score(train_idx, test_idx) -> (train_scores, test_scores).
 
-    In each fold the threshold is chosen on the training scores only.
-    Returns per-fold F1, accuracy, threshold and fit time, and out-of-fold scores.
+    Returns (res, oof, fit): the per-fold results of score_folds plus the fit times,
+    the out-of-fold test scores, and one row of training scores per fold (NaN where
+    fit_score gave no score, e.g. outside the validation rows of the boosting).
     """
-    res = {"f1": [], "accuracy": [], "threshold": [], "seconds": []}
-    oof = np.zeros(len(y))
-    for k in range(folds.max() + 1):
+    seconds, oof = [], np.zeros(len(y))
+    fit = np.full((folds.max() + 1, len(y)), np.nan)
+    for k in range(len(fit)):
         train, test = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
         start = time.time()
-        s_train, s_test = fit_score(train, test)
-        res["seconds"].append(time.time() - start)
-        t = best_threshold(y[train], s_train)
-        f1, acc = f1_accuracy(y[test], s_test >= t)
+        fit[k, train], oof[test] = fit_score(train, test)
+        seconds.append(time.time() - start)
+    return {**score_folds(y, folds, oof, fit), "seconds": seconds}, oof, fit
+
+
+def score_folds(y, folds, oof, fit):
+    """Return the per-fold F1, accuracy and threshold of saved scores.
+
+    oof holds the test scores of every row, fit[k] the training scores of fold k
+    (NaN where missing). The threshold of fold k is chosen on fit[k] only.
+    """
+    res = {"f1": [], "accuracy": [], "threshold": []}
+    for k in range(len(fit)):
+        t = best_threshold(y, fit[k])
+        f1, acc = f1_accuracy(y[folds == k], oof[folds == k] >= t)
         res["f1"].append(f1)
         res["accuracy"].append(acc)
         res["threshold"].append(t)
-        oof[test] = s_test
-    return res, oof
+    return res
 
 
 def summary(res, reference=None):
@@ -99,3 +110,9 @@ def save_result(name, config, res, folder="results"):
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name + ".json"), "w") as f:
         json.dump(record, f, indent=1)
+
+
+def load_result(name, folder="results"):
+    """Return the record written by save_result."""
+    with open(os.path.join(folder, name + ".json")) as f:
+        return json.load(f)

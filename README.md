@@ -26,6 +26,8 @@ about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 (1.1 GB); later runs load them in seconds. With the cache, `run.py` takes about
 10 minutes on a laptop. `experiments.py` takes three to four hours; groups of
 experiments can be run alone, e.g. `python experiments.py methods ablations`.
+Each experiment also saves its cross-validation scores to `results/oof_*.npy`
+(not tracked), for later analysis without retraining.
 
 `run.py` uses fixed random seeds, so its output is reproducible up to
 floating-point differences between machines. Our submission file has MD5
@@ -42,6 +44,7 @@ floating-point differences between machines. Our submission file has MD5
 | `run.py` | Final model (gradient boosting) and the logistic regression baseline; writes `submission.csv`. |
 | `experiments.py` | Cross-validation experiments of the report, by group. |
 | `helpers.py` | Course helpers to load the data and write the submission. |
+| `results/` | Cross-validation results (one JSON per experiment) and AIcrowd scores (`leaderboard_log.csv`). |
 
 ## Method in short
 
