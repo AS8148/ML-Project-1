@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 
+import codebook
 import cv
 import features
 import gbdt
@@ -17,7 +18,8 @@ DATA_DIR = os.path.join("data", "dataset")
 LAMBDA = 10.0
 GAMMA = 1.0
 MAX_ITERS = 500
-# Final model: gradient boosted trees (other parameters: defaults of gbdt.fit).
+# Final model: gradient boosted trees on all the columns decoded by codebook.py
+# (other parameters: defaults of gbdt.fit).
 DEPTH = 3
 RATE = 0.05
 
@@ -52,7 +54,7 @@ def gbdt_scores(x_fit, y_fit, x_apply, depth=DEPTH, rate=RATE):
 
 def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))  # paths are relative to here
-    x_train, x_test, y, test_ids = features.load_data(DATA_DIR)
+    x_train, x_test, y, test_ids = features.load_data(DATA_DIR, codebook.decode)
     s_train, s_test = gbdt_scores(x_train, y, x_test)
     threshold = cv.best_threshold(y, s_train)
     pred = np.where(s_test >= threshold, 1, -1)

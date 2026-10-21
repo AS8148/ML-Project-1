@@ -59,11 +59,13 @@ RECODES = [
 ]
 
 
-def load_data(data_dir, decoded=True):
-    """Return x_train, x_test (columns USED), labels y in {0, 1} and the test ids.
+def load_data(data_dir, decoder=None):
+    """Return x_train, x_test, labels y in {0, 1} and the test ids.
 
-    With decoded=False the answer codes are kept raw (for the ablation study).
-    The parsed CSVs are cached in data_dir/raw.npz, because parsing takes minutes.
+    x_train and x_test are decoder(raw matrix, column names), by default decode
+    (columns USED). The gradient boosting uses codebook.decode, the ablation study
+    select_raw. The parsed CSVs are cached in data_dir/raw.npz, because parsing
+    takes minutes.
     """
     cache = os.path.join(data_dir, "raw.npz")
     if not os.path.exists(cache):
@@ -73,14 +75,17 @@ def load_data(data_dir, decoded=True):
         os.replace(tmp, cache)
     with open(os.path.join(data_dir, "x_train.csv")) as f:
         columns = f.readline().strip().split(",")[1:]
+    if decoder is None:
+        decoder = decode
     with np.load(cache) as raw:
-        if decoded:
-            x_train = decode(raw["x_train"], columns)
-            x_test = decode(raw["x_test"], columns)
-        else:
-            used = [columns.index(c) for c in USED]
-            x_train, x_test = raw["x_train"][:, used], raw["x_test"][:, used]
+        x_train = decoder(raw["x_train"], columns)
+        x_test = decoder(raw["x_test"], columns)
         return x_train, x_test, (raw["y"] == 1).astype(float), raw["test_ids"]
+
+
+def select_raw(x, columns):
+    """Return the columns USED of the raw matrix x, with the answer codes kept raw."""
+    return x[:, [columns.index(c) for c in USED]]
 
 
 def _per_period(a, factors):

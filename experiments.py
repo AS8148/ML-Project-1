@@ -1,11 +1,15 @@
 """Cross-validation experiments behind the tables and the figure of the report.
 
-`python experiments.py [final] [methods] [ablations] [gbdt] [scores]` runs the chosen
-groups (by default all but scores, which repeats runs of final and gbdt: three to
-four hours, of which gbdt takes almost two). The logistic regression baseline, the
-reference of the paired deltas, is always run. Every experiment is saved to
-results/<name>.json, its test and training scores to results/oof_<name>.npy and
-oof_<name>_fit.npy, the figure to report/threshold.pdf.
+`python experiments.py [final] [methods] [ablations] [gbdt] [codebook] [scores]` runs
+the chosen groups (by default all but scores, which repeats runs of final and gbdt:
+four to five hours, of which gbdt takes almost two and codebook one). The logistic
+regression baseline, the reference of the paired deltas, is always run; codebook is
+paired instead with the saved results of the final gradient boosting (groups gbdt and
+final). The gradient boosting gets the columns USED decoded by features.py, except
+in codebook, which gives it the input of run.py: all the columns decoded by
+codebook.py. Every experiment is saved to results/<name>.json, its test and training
+scores to results/oof_<name>.npy and oof_<name>_fit.npy, the figure to
+report/threshold.pdf.
 """
 
 import os
@@ -15,6 +19,7 @@ from functools import partial
 import matplotlib.pyplot as plt
 import numpy as np
 
+import codebook
 import cv
 import features
 import run
@@ -96,7 +101,7 @@ ABLATIONS = [
 # Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
 GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
 
-GROUPS = ["final", "methods", "ablations", "gbdt", "scores"]
+GROUPS = ["final", "methods", "ablations", "gbdt", "codebook", "scores"]
 
 
 def linear_scores(fit, x_fit, y_fit, x_apply):
@@ -187,7 +192,7 @@ def main(groups):
             options = dict(change)
             x_ablation = x
             if not options.pop("decoded", True):
-                x_ablation = features.load_data(run.DATA_DIR, decoded=False)[0]
+                x_ablation = features.load_data(run.DATA_DIR, features.select_raw)[0]
             if "removed" in options:
                 x_ablation = without(x, options.pop("removed"))
             scores_fn = partial(run.logistic_scores, **options)
@@ -201,6 +206,20 @@ def main(groups):
             evaluate(
                 f"gbdt_depth{depth}_rate{rate}", scores_fn, x, y, folds, config, ref
             )
+
+    if "codebook" in groups:
+        # The final gradient boosting on the input of run.py (x_all: all the columns,
+        # decoded by codebook.py), on the folds of both seeds, paired with its saved
+        # results on the columns USED (groups gbdt and final).
+        x_all = features.load_data(run.DATA_DIR, codebook.decode)[0]
+        config = {"depth": run.DEPTH, "rate": run.RATE, "input": "codebook"}
+        ref_gbdt = cv.load_result(f"gbdt_depth{run.DEPTH}_rate{run.RATE}")
+        evaluate("gbdt_codebook", run.gbdt_scores, x_all, y, folds, config, ref_gbdt)
+        ref43 = cv.load_result("gbdt_seed43")
+        new_folds = cv.stratified_folds(y, seed=43)
+        evaluate(
+            "gbdt_codebook_seed43", run.gbdt_scores, x_all, y, new_folds, config, ref43
+        )
 
     if "scores" in groups:
         # The final gradient boosting again, to save its scores on both fold seeds.

@@ -24,7 +24,7 @@ Paths are relative to the repository, so the scripts can be launched from any
 folder. The first run parses the CSV files, which takes several minutes and
 about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 (1.1 GB); later runs load them in seconds. With the cache, `run.py` takes about
-10 minutes on a laptop. `experiments.py` takes three to four hours; groups of
+10 minutes on a laptop. `experiments.py` takes four to five hours; groups of
 experiments can be run alone, e.g. `python experiments.py methods ablations`.
 Each experiment also saves its cross-validation scores to `results/oof_*.npy`
 (not tracked), for later analysis without retraining.
@@ -39,6 +39,7 @@ floating-point differences between machines. Our submission file has MD5
 |---|---|
 | `implementations.py` | The six required methods (least squares, ridge, GD/SGD, logistic regression). |
 | `features.py` | Loading, decoding of the survey answer codes, feature encoding and scaling. |
+| `codebook.py` | Decoding of all the columns with the BRFSS 2015 codebook (input of the gradient boosting), written by our teammate Samuel Bachmann. |
 | `gbdt.py` | Gradient boosted trees for the logistic loss (NumPy only). |
 | `cv.py` | Stratified 5-fold cross-validation and the F1-optimal decision threshold. |
 | `run.py` | Final model (gradient boosting) and the logistic regression baseline; writes `submission.csv`. |
@@ -48,8 +49,11 @@ floating-point differences between machines. Our submission file has MD5
 
 ## Method in short
 
-1. Decode the BRFSS answer codes of 96 selected questions ("don't know" and
-   "refused" become missing, "none" becomes 0, frequencies are converted to one unit).
+1. Decode the BRFSS answer codes ("don't know" and "refused" become missing, "none"
+   becomes 0, frequencies are converted to one unit): for the gradient boosting,
+   all 260 columns left after dropping administrative and redundant ones, with the
+   tables of the CDC codebook (`codebook.py`); for the logistic regression, 96
+   selected questions (`features.py`).
 2. Final model: gradient boosted trees of depth 3 with learning rate 0.05, row
    and column subsampling 0.5, and every question binned into at most 32
    quantiles (missing values in their own bin). The trees are fitted on 80% of
