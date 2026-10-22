@@ -18,7 +18,7 @@ DATA_DIR = os.path.join("data", "dataset")
 LAMBDA = 10.0
 GAMMA = 1.0
 MAX_ITERS = 500
-# Final model: gradient boosted trees on all the columns decoded by codebook.py
+# Final model: gradient boosted trees on the 260 columns decoded by codebook.py
 # (other parameters: defaults of gbdt.fit).
 DEPTH = 3
 RATE = 0.05

@@ -1,4 +1,4 @@
-"""Decoding of all the BRFSS 2015 columns with the CDC codebook, for the boosted trees.
+"""Decoding of the BRFSS 2015 columns with the CDC codebook, for the gradient boosting.
 
 Written by Samuel Bachmann, team member: the tables and the decoding steps are those
 of his codebook.py and data_cleaning.py, restricted to the columns kept.

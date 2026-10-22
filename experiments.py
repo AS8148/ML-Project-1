@@ -2,14 +2,14 @@
 
 `python experiments.py [final] [methods] [ablations] [gbdt] [codebook] [scores]` runs
 the chosen groups (by default all but scores, which repeats runs of final and gbdt:
-four to five hours, of which gbdt takes almost two and codebook one). The logistic
-regression baseline, the reference of the paired deltas, is always run; codebook is
-paired instead with the saved results of the final gradient boosting (groups gbdt and
-final). The gradient boosting gets the columns USED decoded by features.py, except
-in codebook, which gives it the input of run.py: all the columns decoded by
-codebook.py. Every experiment is saved to results/<name>.json, its test and training
-scores to results/oof_<name>.npy and oof_<name>_fit.npy, the figure to
-report/threshold.pdf.
+about five hours, of which gbdt takes almost two and codebook one and a half). The
+logistic regression baseline, the reference of the paired deltas, is always run;
+codebook is paired instead with the saved results of the gradient boosting on the
+columns USED (groups gbdt and final). The gradient boosting gets the columns USED
+decoded by features.py, except in codebook, which gives it the input of run.py: the
+260 columns decoded by codebook.py. Every experiment is saved to
+results/<name>.json, its test and training scores to results/oof_<name>.npy and
+oof_<name>_fit.npy, the figure to report/threshold.pdf.
 """
 
 import os
@@ -208,7 +208,7 @@ def main(groups):
             )
 
     if "codebook" in groups:
-        # The final gradient boosting on the input of run.py (x_all: all the columns,
+        # The final gradient boosting on the input of run.py (x_all: the 260 columns
         # decoded by codebook.py), on the folds of both seeds, paired with its saved
         # results on the columns USED (groups gbdt and final).
         x_all = features.load_data(run.DATA_DIR, codebook.decode)[0]
@@ -222,7 +222,8 @@ def main(groups):
         )
 
     if "scores" in groups:
-        # The final gradient boosting again, to save its scores on both fold seeds.
+        # The gradient boosting on the columns USED again (groups gbdt and final), to
+        # save its scores on both fold seeds.
         # The baseline of seed 43 is read from its saved results (group final).
         ref43 = cv.load_result("logistic_seed43")
         new_folds = cv.stratified_folds(y, seed=43)
