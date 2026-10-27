@@ -24,14 +24,14 @@ Paths are relative to the repository, so the scripts can be launched from any
 folder. The first run parses the CSV files, which takes several minutes and
 about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 (1.1 GB); later runs load them in seconds. With the cache, `run.py` takes about
-10 minutes on a laptop. `experiments.py` takes about five hours; groups of
+8.5 minutes on a laptop. `experiments.py` takes about five hours; groups of
 experiments can be run alone, e.g. `python experiments.py methods ablations`.
 Each experiment also saves its cross-validation scores to `results/oof_*.npy`
 (not tracked), for later analysis without retraining.
 
 `run.py` uses fixed random seeds, so its output is reproducible up to
 floating-point differences between machines. Our submission file has MD5
-`4663fde19985460f68dab1ba78314935` (same with NumPy 1.23 and 2.1).
+`c7e12cb2ebc684664ba47d805ec6dec6` (F1 0.454 on AIcrowd).
 
 ## Files
 
@@ -53,7 +53,9 @@ floating-point differences between machines. Our submission file has MD5
    becomes 0, frequencies are converted to one unit). The gradient boosting reads
    the 260 columns left after dropping administrative and redundant ones, decoded
    with the tables of the CDC codebook (`codebook.py`). The logistic regression
-   reads 96 selected questions, decoded by `features.py`.
+   reads 96 selected questions, decoded by `features.py`. The answer HAREHAB1
+   (cardiac rehabilitation, asked only after a heart attack) is kept: it is
+   answered by 0.24% of the training rows, all positive.
 2. Final model: gradient boosted trees of depth 3 with learning rate 0.05, row
    and column subsampling 0.5, and every question binned into at most 32
    quantiles (missing values in their own bin). The trees are fitted on 80% of
@@ -64,5 +66,5 @@ floating-point differences between machines. Our submission file has MD5
    encoded and standardized features, with the F1-optimal threshold on the
    training predictions.
 
-Cross-validated F1 (5 folds): 0.442 for the gradient boosting, 0.438 for the
-logistic regression.
+Cross-validated F1 (5 folds, seed 42): 0.444 for the gradient boosting (0.444
+on the folds of seed 43), 0.438 for the logistic regression.

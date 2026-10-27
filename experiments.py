@@ -1,13 +1,14 @@
 """Cross-validation experiments behind the tables and the figure of the report.
 
-`python experiments.py [final] [methods] [ablations] [gbdt] [codebook] [scores]` runs
-the chosen groups (by default all but scores, which repeats runs of final and gbdt:
-about five hours, of which gbdt takes almost two and codebook one and a half). The
-logistic regression baseline, the reference of the paired deltas, is always run;
-codebook is paired instead with the saved results of the gradient boosting on the
-columns USED (groups gbdt and final). The gradient boosting gets the columns USED
-decoded by features.py, except in codebook, which gives it the input of run.py: the
-260 columns decoded by codebook.py. Every experiment is saved to
+`python experiments.py [final] [methods] [ablations] [gbdt] [codebook] [figure]
+[scores]` runs the chosen groups (by default all but scores, which repeats runs of
+final and gbdt: about five hours, of which gbdt takes almost two and codebook one and
+a half). The logistic regression baseline, the reference of the paired deltas, is
+always run; codebook is paired instead with the saved results of the gradient
+boosting on the columns USED (groups gbdt and final), and figure draws the threshold
+curve of the final model from the scores saved by codebook. The gradient boosting
+gets the columns USED decoded by features.py, except in codebook, which gives it the
+input of run.py: the 260 columns decoded by codebook.py. Every experiment is saved to
 results/<name>.json, its test and training scores to results/oof_<name>.npy and
 oof_<name>_fit.npy, the figure to report/threshold.pdf.
 """
@@ -101,7 +102,7 @@ ABLATIONS = [
 # Gradient boosting (gbdt.py, other parameters at their defaults): (depth, rate).
 GBDT_GRID = [(3, 0.1), (4, 0.1), (3, 0.05), (4, 0.05)]
 
-GROUPS = ["final", "methods", "ablations", "gbdt", "codebook", "scores"]
+GROUPS = ["final", "methods", "ablations", "gbdt", "codebook", "figure", "scores"]
 
 
 def linear_scores(fit, x_fit, y_fit, x_apply):
@@ -135,7 +136,7 @@ def evaluate(name, scores_fn, x, y, folds, config, reference=None):
 
 
 def fixed_threshold(y, folds, oof, reference):
-    """Score the out-of-fold logits of the baseline with probability 0.5."""
+    """Score out-of-fold logits with the default threshold, probability 0.5."""
     res = {"f1": [], "accuracy": []}
     for k in range(folds.max() + 1):
         f1, acc = cv.f1_accuracy(y[folds == k], oof[folds == k] >= 0)
@@ -173,8 +174,6 @@ def main(groups):
     ref, oof = evaluate("logistic", run.logistic_scores, x, y, folds, baseline)
 
     if "final" in groups:
-        plot_threshold(y, folds, oof, ref, "report/threshold.pdf")
-        fixed_threshold(y, folds, oof, ref)
         # All choices were made on the folds of seed 42: check on unseen folds.
         new_folds = cv.stratified_folds(y, seed=43)
         ref43, _ = evaluate(
@@ -220,6 +219,13 @@ def main(groups):
         evaluate(
             "gbdt_codebook_seed43", run.gbdt_scores, x_all, y, new_folds, config, ref43
         )
+
+    if "figure" in groups:
+        # Threshold of the final model (seed 42), from the scores saved by codebook.
+        res = cv.load_result("gbdt_codebook")
+        oof = np.load("results/oof_gbdt_codebook.npy")
+        plot_threshold(y, folds, oof, res, "report/threshold.pdf")
+        fixed_threshold(y, folds, oof, res)
 
     if "scores" in groups:
         # The gradient boosting on the columns USED again (groups gbdt and final), to

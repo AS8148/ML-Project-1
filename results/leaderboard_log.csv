@@ -1,3 +1,4 @@
 date,model,commit,md5,cv_f1,aicrowd_f1,aicrowd_accuracy
 2026-09-29,logistic regression,fabf76e,2b80879eda4fa6b62904761b01f70b0a,0.4384,0.447,0.884
 2026-10-12,gradient boosting,f11a1c9,4663fde19985460f68dab1ba78314935,0.4424,0.452,0.880
+2026-10-27,gradient boosting (codebook input),abcf4ca,c7e12cb2ebc684664ba47d805ec6dec6,0.4440,0.454,0.875
