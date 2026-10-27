@@ -6,11 +6,13 @@ final and gbdt: about five hours, of which gbdt takes almost two and codebook on
 a half). The logistic regression baseline, the reference of the paired deltas, is
 always run; codebook is paired instead with the saved results of the gradient
 boosting on the columns USED (groups gbdt and final), and figure draws the threshold
-curve of the final model from the scores saved by codebook. The gradient boosting
-gets the columns USED decoded by features.py, except in codebook, which gives it the
-input of run.py: the 260 columns decoded by codebook.py. Every experiment is saved to
-results/<name>.json, its test and training scores to results/oof_<name>.npy and
-oof_<name>_fit.npy, the figure to report/threshold.pdf.
+curve of the final model from the scores saved by codebook. The group final repeats
+the logistic regression and the boosting on the columns USED on the folds of seed
+43. The gradient boosting gets the columns USED decoded by features.py, except in
+codebook, which gives it the input of run.py: the 260 columns decoded by
+codebook.py. Every experiment is saved to results/<name>.json, its test and
+training scores to results/oof_<name>.npy and oof_<name>_fit.npy, the figure to
+report/threshold.pdf.
 """
 
 import os
@@ -143,7 +145,8 @@ def fixed_threshold(y, folds, oof, reference):
         res["f1"].append(f1)
         res["accuracy"].append(acc)
     print("threshold_0.5:", cv.summary(res, reference))
-    cv.save_result("threshold_0.5", {"probability": 0.5, "logit": 0.0}, res)
+    config = {"scores": reference["name"], "probability": 0.5, "logit": 0.0}
+    cv.save_result("threshold_0.5", config, res)
 
 
 def plot_threshold(y, folds, oof, res, path):
@@ -156,7 +159,7 @@ def plot_threshold(y, folds, oof, res, path):
         f1 = [cv.f1_accuracy(y[test], oof[test] >= t)[0] for t in logits]
         ax.plot(probs, f1, "C0", lw=0.8, label="test folds" if k == 0 else None)
     chosen = 1 / (1 + np.exp(-np.array(res["threshold"])))  # logits to probabilities
-    ax.plot(chosen, res["f1"], "k.", ms=5, label="chosen on training data")
+    ax.plot(chosen, res["f1"], "k.", ms=5, label="chosen on validation rows")
     ax.axvline(0.5, color="grey", ls="--", lw=0.8, label="default 0.5")
     ax.set_xlabel("probability threshold")
     ax.set_ylabel("F1")
