@@ -1,7 +1,8 @@
 {
  "name": "threshold_0.5",
- "commit": "d6e92f1",
+ "commit": "341946c",
  "config": {
+  "scores": "gbdt_codebook",
   "probability": 0.5,
   "logit": 0.0
  },
