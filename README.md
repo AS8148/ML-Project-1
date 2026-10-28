@@ -32,12 +32,10 @@ about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 8.5 minutes on a laptop. `experiments.py` takes about five hours; groups of
 experiments can be run alone, e.g. `python experiments.py methods ablations`.
 Each experiment also saves its cross-validation scores to `results/oof_*.npy`
-(not tracked), for later analysis without retraining. Five rejected variants of
-Table II of the report are not in `experiments.py`: the average with a neural
-network was run by `experiments.py ensemble` at commit `389cb20` (branch
-`luca/ensemble`), and bagging, 64 bins, rate 0.025 and trees started from the
-logistic logits by `experiments.py levers` at commit `6589c67` (branch
-`luca/levers`).
+(not tracked), for later analysis without retraining. Five variants of Table II
+of the report were tried and rejected, and their code is not part of this
+submission: the average with a neural network, bagging of 3 models, 64 bins,
+rate 0.025 and trees started from the logistic logits.
 
 `run.py` uses fixed random seeds, so its output is reproducible up to
 floating-point differences between machines. Our submission file has MD5
