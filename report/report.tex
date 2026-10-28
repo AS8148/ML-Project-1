@@ -56,9 +56,8 @@ answers are one-hot encoded with ``missing'' as a level (levels with fewer than
 median-imputed with a missing indicator when at least 10\% are missing, and all
 features are standardized and clipped to $\pm8$ ($\approx$220 features). The
 gradient boosting reads 260 columns instead: all but 61 administrative (dates,
-sampling weights, phone screening) and redundant ones, decoded with tables that
-one of us (S.~Bachmann) wrote from the codebook of the provided
-data~\cite{brfss15}; missing values get their own bin. All statistics are
+sampling weights, phone screening) and redundant ones, decoded with tables
+written from the codebook of the provided data~\cite{brfss15}; missing values get their own bin. All statistics are
 estimated on the training rows of each fold.
 
 \paragraph{The HAREHAB1 answer}
@@ -203,8 +202,7 @@ flagged) is close to the best one of every fold.
 \end{figure}
 
 \paragraph{Team blend}
-Our team's best AIcrowd score, 0.456, comes from a heavier model by one of us
-(S.~Bachmann): boosted trees of depth 6 (300 trees, 4 seeds, weight 0.7) averaged
+Our team's best AIcrowd score, 0.456, comes from a heavier model: boosted trees of depth 6 (300 trees, 4 seeds, weight 0.7) averaged
 with neural networks with two hidden layers (10 seeds, weight 0.3). Its
 cross-validated F1, 0.446, uses other folds and a single
 threshold chosen on the same out-of-fold predictions it is scored on, so it is
