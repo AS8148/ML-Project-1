@@ -20,3 +20,6 @@ report/*.log
 report/*.bbl
 report/*.blg
 report/*.out
+
+# Dataset archive: not part of the submission (see README)
+data/*.zip

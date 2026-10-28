@@ -6,11 +6,14 @@ using only Python and NumPy.
 ## Setup
 
 - Python 3.9 or newer with NumPy (and matplotlib for the figure of `experiments.py`).
-- Extract the data so that `x_train.csv`, `y_train.csv` and `x_test.csv` are in
-  `data/dataset/`:
+- The data are not included in this repository. Download
+  `data/dataset_to_release.zip` from the course repository
+  (https://github.com/epfml/ML_course/tree/main/projects/project1) and extract
+  `x_train.csv`, `y_train.csv` and `x_test.csv` into `data/dataset/`, for
+  example, with the archive saved at the root of the repository:
 
   ```
-  python -m zipfile -e data/dataset_to_release.zip data/
+  python -m zipfile -e dataset_to_release.zip data/
   ```
 
 ## Usage
@@ -20,6 +23,8 @@ python run.py          # trains the final model and writes submission.csv
 python experiments.py  # experiments of the report: results/*.json, report/threshold.pdf
 ```
 
+`python run.py` produces our selected submission (F1 0.454 on AIcrowd).
+
 Paths are relative to the repository, so the scripts can be launched from any
 folder. The first run parses the CSV files, which takes several minutes and
 about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
@@ -27,11 +32,39 @@ about 3-4 GB of RAM, and caches the parsed arrays in `data/dataset/raw.npz`
 8.5 minutes on a laptop. `experiments.py` takes about five hours; groups of
 experiments can be run alone, e.g. `python experiments.py methods ablations`.
 Each experiment also saves its cross-validation scores to `results/oof_*.npy`
-(not tracked), for later analysis without retraining.
+(not tracked), for later analysis without retraining. Five rejected variants of
+Table II of the report are not in `experiments.py`: the average with a neural
+network was run by `experiments.py ensemble` at commit `389cb20` (branch
+`luca/ensemble`), and bagging, 64 bins, rate 0.025 and trees started from the
+logistic logits by `experiments.py levers` at commit `6589c67` (branch
+`luca/levers`).
 
 `run.py` uses fixed random seeds, so its output is reproducible up to
 floating-point differences between machines. Our submission file has MD5
 `c7e12cb2ebc684664ba47d805ec6dec6` (F1 0.454 on AIcrowd).
+
+## Blend of Samuel Bachmann (`blend/`)
+
+`blend/` holds a heavier model written by our teammate Samuel Bachmann: the
+average of gradient boosted trees of depth 6 (300 trees, 4 seeds, weight 0.7)
+and neural networks with two hidden layers (10 seeds, weight 0.3). It scored
+F1 0.456 on AIcrowd, the best online score of the team, and 0.4464 +- 0.0040 in
+its own 5-fold cross-validation (other folds and protocol than ours, see
+`blend/tuning_results.md`). It is not our selected submission: it runs for
+about one hour on a 10-core laptop for a small gain, and we kept the simpler
+model of `run.py`. To reproduce it:
+
+```
+python blend/run_blend.py   # writes submission_blend.csv at the root of the repository
+python blend/tuning.py      # its model selection, appended to blend/tuning_results.md
+```
+
+The folder is self-contained (its own copies of the helpers, the cleaning and
+the codebook tables) and reads the same `data/dataset/` folder; its first run
+caches the parsed CSV files in `data/dataset/cache.npz`.
+`blend/implementations.py` is Samuel's copy of the six methods, used by
+`blend/tuning.py`; the graded implementations are in the root
+`implementations.py`.
 
 ## Files
 
@@ -46,6 +79,8 @@ floating-point differences between machines. Our submission file has MD5
 | `experiments.py` | Cross-validation experiments of the report, by group. |
 | `helpers.py` | Course helpers to load the data and write the submission. |
 | `results/` | Cross-validation results (one JSON per experiment) and AIcrowd scores (`leaderboard_log.csv`). |
+| `report/` | The report (`report.tex`, `report.pdf`), its bibliography and figure. |
+| `blend/` | Samuel Bachmann's blend (`run_blend.py`), its modules and model selection (`tuning.py`, `tuning_results.md`). |
 
 ## Method in short
 
