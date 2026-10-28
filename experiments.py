@@ -150,22 +150,31 @@ def fixed_threshold(y, folds, oof, reference):
 
 
 def plot_threshold(y, folds, oof, res, path):
-    """Plot the test F1 of every fold against the probability threshold."""
+    """Plot the test F1 of every fold, and their mean, against the threshold."""
     probs = np.linspace(0.03, 0.6, 115)
     logits = np.log(probs / (1 - probs))
-    fig, ax = plt.subplots(figsize=(3.4, 2.1))
-    for k in range(folds.max() + 1):
-        test = folds == k
-        f1 = [cv.f1_accuracy(y[test], oof[test] >= t)[0] for t in logits]
-        ax.plot(probs, f1, "C0", lw=0.8, label="test folds" if k == 0 else None)
+    tests = [folds == k for k in range(folds.max() + 1)]
+    f1 = np.array(
+        [[cv.f1_accuracy(y[t], oof[t] >= c)[0] for c in logits] for t in tests]
+    )
+    fig, ax = plt.subplots(figsize=(3.75, 1.6))
+    ax.plot(probs, f1.T, color="C0", lw=0.5, alpha=0.4)
+    ax.plot(probs, f1.mean(axis=0), color="C0", lw=1.5, label="test folds, mean")
     chosen = 1 / (1 + np.exp(-np.array(res["threshold"])))  # logits to probabilities
-    ax.plot(chosen, res["f1"], "k.", ms=5, label="chosen on validation rows")
+    ax.plot(chosen, res["f1"], "k.", ms=5, label="chosen thresholds")
+    # Mean F1 of the default rule, probability 0.5 (logit 0), and of the chosen one.
+    default = np.mean([cv.f1_accuracy(y[t], oof[t] >= 0)[0] for t in tests])
+    best = np.mean(res["f1"])
     ax.axvline(0.5, color="grey", ls="--", lw=0.8, label="default 0.5")
-    ax.set_xlabel("probability threshold")
-    ax.set_ylabel("F1")
-    ax.legend(fontsize=7, frameon=False, loc="lower center")
+    ax.hlines(best, chosen.max(), 0.5, color="k", ls=":", lw=0.8)
+    ax.annotate("", (0.5, default), (0.5, best), arrowprops={"arrowstyle": "->"})
+    ax.text(0.51, (best + default) / 2, f"{100 * (default - best):.0f} pp", fontsize=7)
+    ax.set_xlabel("probability threshold", fontsize=8)
+    ax.set_ylabel("F1 on test fold", fontsize=8)
+    ax.tick_params(labelsize=8)
+    ax.legend(fontsize=7, frameon=False, loc="lower left", bbox_to_anchor=(0.1, 0))
     fig.tight_layout()
-    fig.savefig(path)
+    fig.savefig(path, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
 
